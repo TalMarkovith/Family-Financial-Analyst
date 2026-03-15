@@ -75,7 +75,9 @@ def process_and_classify(df):
         df: pandas DataFrame with transaction data
         
     Returns:
-        DataFrame with added Category and Sub_Category columns
+        tuple: (classified_df, pending_reviews)
+            - classified_df: DataFrame with added Category and Sub_Category columns
+            - pending_reviews: list of (merchant_name, category, sub_category) for human review
     """
     from tools.classify_dataframe import classify_dataframe
     return classify_dataframe(df)

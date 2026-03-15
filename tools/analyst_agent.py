@@ -10,6 +10,7 @@ setup_ssl_certificates()
 load_dotenv()
 
 from tools.analysis_history import get_comparison_insights, save_monthly_analysis
+from tools.balance_tracker import update_balance
 
 class FinancialAnalystAgent:
     def __init__(self):
@@ -20,90 +21,143 @@ class FinancialAnalystAgent:
         )
         self.deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 
-    def generate_monthly_story(self, current_df: pd.DataFrame, month_year: str = None) -> str:
+    def generate_monthly_story(self, current_df: pd.DataFrame, month_year: str = None, lang: str = 'he') -> str:
         """Analyzes the classified dataframe and generates a narrative story."""
         
-        # Calculate high-level metrics
-        income = current_df[current_df['Category'] == 'Income']['Amount'].sum()
-        expenses = current_df[current_df['Category'] != 'Income']['Amount'].sum()
+        # 1. Income is simply the sum of all income rows
+        income_df = current_df[current_df['Category'] == 'Income']
+        income = income_df['Amount'].abs().sum()  # Income should be positive
+        
+        # 2. Separate Investments and Expenses
+        # Be VERY specific about investments - only הע. לאנליסט transactions
+        investments_df = current_df[
+            (current_df['Description'].str.contains('אנליסט', case=False, na=False)) &
+            (current_df['Category'] != 'Income')
+        ]
+        
+        expenses_df = current_df[
+            (current_df['Category'] != 'Income') & 
+            (~current_df.index.isin(investments_df.index))
+        ]
+        
+        # 3. Calculate totals
+        # Expenses from credit cards are already positive
+        # Expenses from bank are negative (debits) - use abs()
+        expenses = expenses_df['Amount'].abs().sum()
+        
+        # Investments from bank are negative (debits) - use abs() to show as positive
+        investments = investments_df['Amount'].abs().sum()
+        
+        # Debug output
+        print(f"\n💰 Financial Breakdown:")
+        print(f"  Total Income: ₪{income:,.2f}")
+        print(f"  Total Expenses: ₪{expenses:,.2f} ({len(expenses_df)} transactions)")
+        print(f"  Total Investments: ₪{investments:,.2f} ({len(investments_df)} transactions)")
+        if len(investments_df) > 0:
+            print(f"  Investment transactions:")
+            for _, inv in investments_df.iterrows():
+                print(f"    - {inv['Description']}: ₪{abs(inv['Amount']):,.2f}")
+        
+        # 4. Net Savings = Income - Expenses (investments are separate, NOT subtracted)
+        # Investments are lump-sum transfers to brokerage accounts — they represent
+        # wealth allocation, not consumption. The "savings" metric should show
+        # how much more you earned than you spent on living expenses.
         net_savings = income - expenses
         savings_rate = (net_savings / income * 100) if income > 0 else 0
         
-        # Aggregate top expense sub-categories
-        top_expenses = current_df[current_df['Category'] != 'Income'].groupby('Sub_Category')['Amount'].sum().sort_values(ascending=False).head(5)
-        top_expenses_str = top_expenses.to_string()
+        print(f"  Net Savings: ₪{net_savings:,.2f} ({savings_rate:.1f}%)")
         
-        # Get comparison with previous month
+        # 5. Groupings for the prompt
+        expenses_by_category = expenses_df.groupby('Category')['Amount'].apply(lambda x: x.abs().sum()).sort_values(ascending=False)
+        top_subcategories = expenses_df.groupby('Sub_Category')['Amount'].apply(lambda x: x.abs().sum()).sort_values(ascending=False).head(10)
+        
+        investments_breakdown = ""
+        if investments > 0:
+            investments_by_desc = investments_df.groupby('Description')['Amount'].apply(lambda x: x.abs().sum()).sort_values(ascending=False)
+            investments_breakdown = "\n**💎 השקעות וחסכונות לטווח ארוך (לא נספרים כהוצאות!):**\n"
+            for desc, amount in investments_by_desc.items():
+                if amount > 0:
+                    investments_breakdown += f"- {desc}: ₪{amount:,.2f}\n"
+            investments_breakdown += f"**סה\"כ השקעות שבוצעו החודש:** ₪{investments:,.2f}\n"
+        
+        expense_details = "**פירוט הוצאות שוטפות לפי קטגוריה:**\n"
+        for category, amount in expenses_by_category.items():
+            if amount > 0:
+                expense_details += f"- {category}: ₪{amount:,.2f}\n"
+        
+        expense_details += "\n**תתי-קטגוריות בולטות בהוצאות:**\n"
+        for subcategory, amount in top_subcategories.items():
+            if amount > 0:
+                expense_details += f"- {subcategory}: ₪{amount:,.2f}\n"
+        
+        expense_details += investments_breakdown
+        
+        # History integration
         comparison_text = ""
         if month_year:
             comparison_text = get_comparison_insights(month_year, income, expenses, net_savings, savings_rate)
-            
-            # Save this month's analysis for future comparisons
             save_monthly_analysis(
-                month_year=month_year,
-                income=income,
-                expenses=expenses,
-                net_savings=net_savings,
-                savings_rate=savings_rate,
-                top_expenses=top_expenses.to_dict()
+                month_year=month_year, income=income, expenses=expenses,
+                net_savings=net_savings, savings_rate=savings_rate,
+                top_expenses=top_subcategories.to_dict()
             )
+            # Update running balance
+            update_balance(month_year, income, expenses, investments, net_savings)
         
-        month_context = f" for {month_year}" if month_year else ""
+        month_context_he = f" לחודש {month_year}" if month_year else ""
+        month_context_en = f" for {month_year}" if month_year else ""
 
-        prompt = f"""
-        You are the **Family Financial Analyst** for Tal and Reut - an expert advisor who speaks with clarity, warmth, and actionable insights.
+        # 5. Build prompt based on language
+        if lang == 'he':
+            prompt = f"""
+            אתה **האנליסט הפיננסי המשפחתי** של טל ורעות. 
+            שים לב! "חיסכון נטו" מוגדר כפער בין ההכנסות להוצאות המחיה. ההשקעות הן סעיף נפרד וחיובי.
 
-        📊 **Financial Snapshot{month_context}:**
-        - 💰 **Total Income:** ₪{income:,.2f}
-        - 💸 **Total Expenses:** ₪{expenses:,.2f}
-        - 🎯 **Net Savings:** ₪{net_savings:,.2f} ({savings_rate:.1f}% savings rate)
+            📊 **תמונת המצב הפיננסית האמיתית{month_context_he}:**
+            - 💰 **הכנסות החודש:** ₪{income:,.2f}
+            - 💸 **הוצאות מחיה שוטפות:** ₪{expenses:,.2f}
+            - 🎯 **חיסכון חודשי נטו (הכנסות פחות הוצאות):** ₪{net_savings:,.2f} ({savings_rate:.1f}% שיעור חיסכון!)
+            - 💎 **הון שהופקד להשקעות:** ₪{investments:,.2f}
 
-        🔝 **Top 5 Spending Categories:**
-        {top_expenses_str}
+            {expense_details}
+            {comparison_text}
 
-        📈 **Comparison with Previous Month:**
-        {comparison_text if comparison_text else "No previous month data available for comparison."}
+            **הנחיות קריטיות לכתיבת הניתוח:**
+            1. חגוג את החיסכון החודשי! (₪{net_savings:,.2f}). זה מראה שהם חיים הרבה מתחת לרמת ההכנסה שלהם.
+            2. אם ההשקעות (₪{investments:,.2f}) גדולות יותר מהחיסכון הנטו, ציין בהתלהבות: "החודש השקעתם סכום עצום של ₪{investments:,.2f}, שמורכב מהחיסכון של החודש בתוספת כספים מחודשים קודמים. זהו ניהול הון חכם מאוד!"
+            3. לעולם אל תציג את ההשקעות כהפסד או כגירעון בעו"ש.
+            4. הצג 5-8 סעיפי הוצאות בולטים.
+            5. כתוב הכל בעברית מימין לשמאל (RTL) בפורמט Markdown נקי ונעים עם אימוג'ים.
+            6. אל תמציא מספרים. השתמש רק בנתונים המדויקים שסיפקתי למעלה.
+            """
+        else:  # English
+            prompt = f"""
+            You are the **Family Financial Analyst** for Tal & Reut.
+            Note: "Net Savings" = Income minus living expenses. Investments are a separate, positive item.
 
-        **Your Mission:**
-        Write an engaging, crystal-clear financial story in **Hebrew (RTL - right to left)** that includes:
+            📊 **Financial Snapshot{month_context_en}:**
+            - 💰 **Monthly Income:** ₪{income:,.2f}
+            - 💸 **Living Expenses:** ₪{expenses:,.2f}
+            - 🎯 **Net Monthly Savings (Income minus Expenses):** ₪{net_savings:,.2f} ({savings_rate:.1f}% savings rate!)
+            - 💎 **Invested Capital:** ₪{investments:,.2f}
 
-        1. **פתיחה חמה** - ברכה חמה עם "כותרת" מהירה על החודש הכלכלי (האם הם הצליחו מעולה? האם יש דאגות?)
-        
-        2. **המספרים מספרים סיפור** - הסבר את קצב השריפה שלהם במונחים פשוטים:
-           - כמה נכנס מול כמה יצא
-           - האם שיעור החיסכון בריא? (20%+ מצוין, 10-20% טוב, <10% צריך תשומת לב)
-           - תן פרספקטיבה (למשל: "זה אומר שחסכתם כמעט רבע מההכנסה - מעולה!")
-           - **אם יש נתוני חודש קודם - הדגש את השינויים!** (עלייה/ירידה בהוצאות, שיפור בחיסכון)
-        
-        3. **זרקור על ההוצאות** - הדגש 2-3 דפוסים מעניינים:
-           - לאן הלך רוב הכסף? (השתמש באימוג'ים כדי להפוך את זה ויזואלי)
-           - האם יש הפתעות או הוצאות חריגות?
-           - מהלכים חכמים שהם עשו
-           - **אם יש השוואה לחודש קודם - הזכר קטגוריות שעלו או ירדו**
-        
-        4. **מה לעשות עם החיסכון החודש הבא** - תן המלצה ספציפית ומעשית אחת או שתיים:
-           - כמה חסכתם? האם כדאי להעביר להשקעות? (קרן פנסיה, קרן השתלמות, מניות)?
-           - אילו תחומים לעקוב/לצמצם
-           - יעדים להציב **בהתבסס על המגמה מהחודש הקודם**
-           - אם יש חוב או הוצאת יתר - תכנית להתאוששות
-        
-        **Style Guidelines:**
-        - Write EVERYTHING in Hebrew from right to left
-        - Use **bold** for key numbers and insights  
-        - Add relevant emojis (💰 🎯 📈 ⚠️ ✅ 🏦 💳 🎉) to make it scannable
-        - Keep it concise but impactful (3-4 short paragraphs)
-        - End with encouragement and actionable next steps
-        - Focus on NEXT MONTH actions, not "next year"
-        - **INTEGRATE the comparison data naturally into your narrative**
-        
-        Format in clean Markdown with clear Hebrew sections. DO NOT use English headers.
-        """
+            {expense_details}
+            {comparison_text}
+
+            **Critical writing guidelines:**
+            1. Celebrate the monthly savings! (₪{net_savings:,.2f}). This shows they live well below their income level.
+            2. If investments (₪{investments:,.2f}) exceed net savings, note enthusiastically: "This month you invested a massive ₪{investments:,.2f}, combining this month's savings with funds from previous months. This is very smart capital management!"
+            3. Never present investments as a loss or account deficit.
+            4. Highlight 5-8 notable expense categories.
+            5. Write in clean Markdown format with emojis.
+            6. Do NOT invent numbers. Use ONLY the exact data provided above.
+            """
 
         try:
             response = self.client.chat.completions.create(
                 model=self.deployment_name,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=1
+                temperature=0.2 
             )
             return response.choices[0].message.content
         except Exception as e:

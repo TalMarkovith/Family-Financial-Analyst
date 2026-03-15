@@ -33,6 +33,7 @@ data/
 *.xlsx
 *.xls
 *.pdf
+*.json  # Includes pinned_insights.json and monthly_analysis_history.json
 
 # IDE
 .vscode/

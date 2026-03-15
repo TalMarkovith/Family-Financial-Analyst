@@ -58,8 +58,13 @@ class MemoryManager:
             )
             
             for result in results:
+                score = result['@search.score']
+                matched = result.get('merchant_name', '?')
+                # Always log the top match and its score for debugging
+                print(f"      Memory top match: '{matched}' (score={score:.4f}, threshold={threshold})")
+                
                 # If the semantic similarity is higher than our threshold, it's a match!
-                if result['@search.score'] >= threshold:
+                if score >= threshold:
                     return {
                         "category": result['category'],
                         "sub_category": result['sub_category'],
