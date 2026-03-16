@@ -451,6 +451,19 @@ def load_historical_data():
         # Ensure Amount is numeric
         if 'Amount' in df.columns:
             df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
+            # Normalize sign convention for legacy data:
+            # Old data stored CC charges as positive; new convention: negative = money out.
+            # Negate ALL CC amounts so charges become negative and refunds become positive.
+            # Manual_Income stays positive (money in). Bank_Discount keeps its original signs.
+            if 'Source' in df.columns:
+                cc_sources = ['Max', 'Isracard', 'Discount_Credit_Card']
+                cc_mask = df['Source'].isin(cc_sources)
+                if cc_mask.any():
+                    # Check if data is in old format (most CC amounts positive = charges)
+                    cc_positive_ratio = (df.loc[cc_mask, 'Amount'] > 0).mean()
+                    if cc_positive_ratio > 0.5:
+                        # Old format detected — negate to convert
+                        df.loc[cc_mask, 'Amount'] = df.loc[cc_mask, 'Amount'] * -1
         return df
     return pd.DataFrame()
 
@@ -634,7 +647,7 @@ with st.sidebar:
             
             # 4. Clear session state
             for key in ['current_df', 'history_df', 'story', 'selected_month', 
-                        'pending_reviews', 'pinned_insights']:
+                        'pending_reviews', 'pinned_insights', 'dup_txns']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.session_state.pinned_insights = []
@@ -670,7 +683,12 @@ if run_button and uploaded_files:
             ingestion_agent = IngestionAgent()
             raw_unified_df = ingestion_agent.run_monthly_ingestion(saved_file_paths)
             
-            my_bar.progress(40, text=t('progress_filtering', L))
+            my_bar.progress(35, text=t('progress_filtering', L))
+            
+            # ── Safety: Duplicate file detection ──
+            if ingestion_agent.duplicate_files:
+                for dup_name, orig_name in ingestion_agent.duplicate_files:
+                    st.warning(t('dup_file_desc', L, filename=dup_name, original=orig_name))
             
             # Show date info (dates are already parsed by IngestionAgent)
             st.info(t('loaded_total', L, count=len(raw_unified_df)))
@@ -703,6 +721,21 @@ if run_button and uploaded_files:
             if filtered_df.empty:
                 st.error(t('no_transactions', L, month=selected_month))
                 st.stop()
+            
+            # ── Safety: Duplicate transaction detection (within same upload) ──
+            dup_txns = IngestionAgent.detect_duplicate_transactions(filtered_df, date_tolerance_days=0)
+            if dup_txns:
+                st.session_state['dup_txns'] = dup_txns
+            
+            # ── Safety: Check overlap with historical data ──
+            history_df = load_historical_data()
+            if not history_df.empty:
+                history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
+                hist_month = history_df[
+                    (history_df['Date'].dt.year == year) & (history_df['Date'].dt.month == month)
+                ]
+                if not hist_month.empty:
+                    st.info(t('dup_file_history_desc', L, count=len(hist_month)))
             
             my_bar.progress(50, text=t('progress_classifying', L))
             
@@ -800,6 +833,97 @@ if run_button and uploaded_files:
             import traceback
             st.error(traceback.format_exc())
 
+# ── Duplicate Transaction Review Panel ──
+if 'dup_txns' in st.session_state and st.session_state['dup_txns']:
+    dup_txns = st.session_state['dup_txns']
+    
+    st.markdown("---")
+    _dir = 'rtl' if L == 'he' else 'ltr'
+    _align = 'right' if L == 'he' else 'left'
+    st.markdown("""
+    <div dir="{dir}" style="background: linear-gradient(135deg, #2d1b1b 0%, #1a1a2e 100%); 
+                border: 2px solid #e17055; border-radius: 16px; padding: 24px; margin: 16px 0;
+                text-align: {align};">
+        <h3 style="color: #fab1a0; margin-top: 0;">{title}</h3>
+        <p style="color: #dfe6e9; font-size: 0.9rem;">
+            {desc}
+        </p>
+    </div>
+    """.format(dir=_dir, align=_align, 
+               title=t('dup_txn_title', L), 
+               desc=t('dup_txn_desc', L, count=len(dup_txns))), unsafe_allow_html=True)
+    
+    # Table header
+    dup_hdr = st.columns([1.5, 3, 1.2, 1.5, 2])
+    with dup_hdr[0]:
+        st.markdown(f"**{t('dup_txn_col_date', L)}**")
+    with dup_hdr[1]:
+        st.markdown(f"**{t('dup_txn_col_merchant', L)}**")
+    with dup_hdr[2]:
+        st.markdown(f"**{t('dup_txn_col_amount', L)}**")
+    with dup_hdr[3]:
+        st.markdown(f"**{t('dup_txn_col_source', L)}**")
+    with dup_hdr[4]:
+        st.markdown(f"**{t('dup_txn_col_action', L)}**")
+    
+    st.markdown("<hr style='margin: 4px 0; border-color: #555;'>", unsafe_allow_html=True)
+    
+    for idx, dup in enumerate(dup_txns):
+        dup_cols = st.columns([1.5, 3, 1.2, 1.5, 2])
+        with dup_cols[0]:
+            st.markdown(f"{dup['date']}")
+        with dup_cols[1]:
+            st.markdown(f"**{dup['description'][:40]}**")
+        with dup_cols[2]:
+            st.markdown(f"₪{abs(dup['amount']):,.0f}")
+        with dup_cols[3]:
+            st.markdown(f"{dup['source']}")
+        with dup_cols[4]:
+            action_options = [t('dup_txn_keep', L), t('dup_txn_remove', L)]
+            st.selectbox(
+                "Action",
+                action_options,
+                index=0,
+                key=f"dup_action_{idx}",
+                label_visibility="collapsed"
+            )
+    
+    if st.button(t('dup_txn_confirm', L), type="primary", use_container_width=True):
+        # Collect indices to remove
+        indices_to_remove = []
+        remove_label = t('dup_txn_remove', L)
+        for idx, dup in enumerate(dup_txns):
+            action = st.session_state.get(f"dup_action_{idx}", '')
+            if action == remove_label:
+                # Remove the SECOND occurrence (keep the first)
+                if len(dup['indices']) > 1:
+                    indices_to_remove.append(dup['indices'][1])
+        
+        if indices_to_remove and 'current_df' in st.session_state:
+            df = st.session_state['current_df']
+            # Only drop indices that actually exist in the dataframe
+            valid_indices = [i for i in indices_to_remove if i in df.index]
+            if valid_indices:
+                df = df.drop(index=valid_indices).reset_index(drop=True)
+                st.session_state['current_df'] = df
+                
+                # Regenerate story with corrected data
+                analyst = FinancialAnalystAgent()
+                selected_month = st.session_state.get('selected_month', '')
+                story_markdown = analyst.generate_monthly_story(df, selected_month, lang=L)
+                st.session_state['story'] = story_markdown
+                
+                # Re-save history
+                full_history_df = save_to_history(df)
+                st.session_state['history_df'] = full_history_df
+            
+            st.success(t('dup_txn_resolved', L, count=len(valid_indices)))
+        else:
+            st.info(t('dup_txn_none', L))
+        
+        st.session_state['dup_txns'] = []
+        st.rerun()
+
 # ── Human Review Panel for New Classifications ──
 if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']:
     reviews = st.session_state['pending_reviews']
@@ -845,8 +969,14 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
     for i, item in enumerate(reviews):
         merchant, cat, sub = item[0], item[1], item[2]
         amount = item[3] if len(item) > 3 else 0
-        # Determine if AI thinks this is income or expense
-        ai_type = 'Income' if cat == 'Income' else 'Expense'
+        # Type is determined by the amount sign (set during ingestion)
+        # negative = expense, positive = income/refund
+        if amount > 0:
+            ai_type = 'Income'
+        elif amount < 0:
+            ai_type = 'Expense'
+        else:
+            ai_type = 'Expense'  # default for zero
         review_data.append({
             'idx': i,
             'merchant': merchant,
@@ -873,7 +1003,7 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
     
     st.markdown("<hr style='margin: 4px 0; border-color: #333;'>", unsafe_allow_html=True)
     
-    # Display each merchant with editable dropdowns + type toggle
+    # Display each merchant with editable dropdowns (type is read-only from amount sign)
     for item in review_data:
         cols = st.columns([3, 1.2, 1, 2, 2, 0.5])
         
@@ -884,32 +1014,17 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
             st.markdown(f"₪{abs(item['amount']):,.0f}")
         
         with cols[2]:
-            # Income/Expense toggle
-            type_options = [t('type_expense', L), t('type_income', L)]
-            type_idx = 1 if item['ai_type'] == 'Income' else 0
-            new_type = st.selectbox(
-                "Type",
-                type_options,
-                index=type_idx,
-                key=f"review_type_{item['idx']}",
-                label_visibility="collapsed"
-            )
+            # Read-only type badge derived from amount sign
+            if item['ai_type'] == 'Income':
+                st.markdown(f"🟢 {t('type_income', L)}")
+            else:
+                st.markdown(f"🔴 {t('type_expense', L)}")
         
         with cols[3]:
-            # If user switched to Income, force category to Income
-            # Compare against the translated Income label
-            is_income_selected = (new_type == t('type_income', L))
-            if is_income_selected:
-                available_cats = ['Income']
-            else:
-                available_cats = [c for c in all_categories if c != 'Income']
+            # Category dropdown — all categories available (type is independent of category)
+            available_cats = all_categories
             
             default_cat = item['ai_category']
-            if is_income_selected:
-                default_cat = 'Income'
-            elif item['ai_category'] == 'Income':
-                default_cat = available_cats[0]
-            
             cat_idx = available_cats.index(default_cat) if default_cat in available_cats else 0
             new_cat = st.selectbox(
                 "Category",
@@ -933,10 +1048,7 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
             )
         
         with cols[5]:
-            # Compare using normalized type (translated string → canonical)
-            new_type_canonical = 'Income' if is_income_selected else 'Expense'
-            changed = (new_type_canonical != item['ai_type'] or 
-                      new_cat != item['ai_category'] or 
+            changed = (new_cat != item['ai_category'] or 
                       new_sub != item['ai_sub'])
             st.markdown('✏️' if changed else '✅')
     
@@ -945,24 +1057,14 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
     with col_approve:
         if st.button(t('btn_approve', L), type="primary", use_container_width=True):
             approved = []
-            income_label = t('type_income', L)
             for item in review_data:
-                final_type_display = st.session_state.get(f"review_type_{item['idx']}", '')
-                final_is_income = (final_type_display == income_label) if final_type_display else (item['ai_type'] == 'Income')
                 final_cat = st.session_state.get(f"review_cat_{item['idx']}", item['ai_category'])
                 final_sub = st.session_state.get(f"review_sub_{item['idx']}", item['ai_sub'])
-                
-                # If user marked as Income, force category
-                if final_is_income:
-                    final_cat = 'Income'
-                    if final_sub not in ['Tal_Salary', 'Reut_Salary', 'Other_Income_Bit']:
-                        final_sub = 'Other_Income_Bit'
                 
                 approved.append({
                     'merchant_name': item['merchant'],
                     'category': final_cat,
                     'sub_category': final_sub,
-                    'is_income': final_is_income,
                 })
             
             # Save to memory
@@ -1034,10 +1136,10 @@ if 'current_df' in st.session_state:
         st.markdown(f"### {t('visual_breakdown', L)}")
         
         
-        # Filter out Income and Investments for the expense pie chart
-        # Use abs() because bank transactions are negative (debits)
+        # Filter to expenses only (negative amounts = money out)
+        # Exclude investments (Category='Investments' or אנליסט keyword)
         expenses_only = curr_df[
-            (curr_df['Category'] != 'Income') &
+            (curr_df['Amount'] < 0) &
             (curr_df['Category'] != 'Investments') &
             (~curr_df['Description'].str.contains('אנליסט', case=False, na=False))
         ].copy()
@@ -1136,8 +1238,11 @@ if 'current_df' in st.session_state:
             hist_df['Month_Year'] = hist_df['Date'].dt.to_period('M').astype(str)
             # Remove any 'NaT' or invalid month_year values
             hist_df = hist_df[hist_df['Month_Year'] != 'NaT']
-            # Exclude Investments from Expenses
-            hist_df = hist_df[hist_df['Category'] != 'Investments']
+            # Exclude investment transfers (Category='Investments' or אנליסט keyword)
+            hist_df = hist_df[
+                (hist_df['Category'] != 'Investments') &
+                (~hist_df['Description'].astype(str).str.contains('אנליסט', case=False, na=False))
+            ]
             # Translate category/sub-category labels for charts and table
             hist_df['Category'] = hist_df['Category'].apply(lambda x: cat_display(x, L))
             hist_df['Sub_Category'] = hist_df['Sub_Category'].apply(lambda x: sub_display(x, L))
@@ -1147,10 +1252,9 @@ if 'current_df' in st.session_state:
                 st.warning("No valid historical data found.")
             else:
                 st.info(f"📅 Showing data for {len(actual_months)} months: {', '.join(actual_months)}")
-            # Separate Income vs Expenses
-            hist_df['Type'] = hist_df['Category'].apply(lambda x: 'Income' if x == cat_display('Income', L) else 'Expenses')
-            # Group by Month and Type (Income vs Expenses) - only for months with data
-            # Use abs() so bank debits (negative) don't cancel out CC charges (positive)
+            # Separate Income vs Expenses based on amount sign
+            hist_df['Type'] = hist_df['Amount'].apply(lambda x: 'Income' if x > 0 else 'Expenses')
+            # Group by Month and Type (Income vs Expenses) - use abs for display
             income_expense_timeline = hist_df.groupby(['Month_Year', 'Type'])['Amount'].apply(
                 lambda x: x.abs().sum()
             ).reset_index()
@@ -1243,8 +1347,99 @@ if 'current_df' in st.session_state:
 
     with tab3:
         st.header(t('raw_data', L))
-    # Translate category/sub-category labels for table
-    table_df = curr_df.copy()
-    table_df['Category'] = table_df['Category'].apply(lambda x: cat_display(x, L))
-    table_df['Sub_Category'] = table_df['Sub_Category'].apply(lambda x: sub_display(x, L))
-    st.dataframe(table_df, use_container_width=True)
+        st.info(t('raw_type_header', L))
+        
+        # Build display dataframe with translated labels and a Type column
+        table_df = curr_df.copy()
+        
+        # Derive Type from amount sign
+        def _get_type_label(amount):
+            if amount > 0:
+                return t('type_income', L)
+            else:
+                return t('type_expense', L)
+        
+        table_df['_display_cat'] = table_df['Category'].apply(lambda x: cat_display(x, L))
+        table_df['_display_sub'] = table_df['Sub_Category'].apply(lambda x: sub_display(x, L))
+        
+        type_options = [t('type_expense', L), t('type_income', L), t('type_refund', L)]
+        
+        # Table header
+        raw_hdr = st.columns([1.2, 3, 1.2, 1, 2, 2])
+        with raw_hdr[0]:
+            st.markdown(f"**{t('dup_txn_col_date', L)}**")
+        with raw_hdr[1]:
+            st.markdown(f"**{t('col_merchant', L)}**")
+        with raw_hdr[2]:
+            st.markdown(f"**{t('col_amount', L)}**")
+        with raw_hdr[3]:
+            st.markdown(f"**{t('col_type', L)}**")
+        with raw_hdr[4]:
+            st.markdown(f"**{t('col_category', L)}**")
+        with raw_hdr[5]:
+            st.markdown(f"**{t('col_subcategory', L)}**")
+        
+        st.markdown("<hr style='margin: 4px 0; border-color: #333;'>", unsafe_allow_html=True)
+        
+        # Show each row with editable type
+        for idx, row in table_df.iterrows():
+            row_cols = st.columns([1.2, 3, 1.2, 1, 2, 2])
+            with row_cols[0]:
+                st.markdown(f"<small>{str(row['Date'])[:10]}</small>", unsafe_allow_html=True)
+            with row_cols[1]:
+                st.markdown(f"<small>{str(row['Description'])[:40]}</small>", unsafe_allow_html=True)
+            with row_cols[2]:
+                st.markdown(f"<small>₪{abs(row['Amount']):,.0f}</small>", unsafe_allow_html=True)
+            with row_cols[3]:
+                current_type = _get_type_label(row['Amount'])
+                type_idx = type_options.index(current_type) if current_type in type_options else 0
+                st.selectbox(
+                    "type",
+                    type_options,
+                    index=type_idx,
+                    key=f"raw_type_{idx}",
+                    label_visibility="collapsed",
+                )
+            with row_cols[4]:
+                st.markdown(f"<small>{row['_display_cat']}</small>", unsafe_allow_html=True)
+            with row_cols[5]:
+                st.markdown(f"<small>{row['_display_sub']}</small>", unsafe_allow_html=True)
+        
+        # Save button
+        if st.button(t('raw_save_changes', L), type="primary", use_container_width=True):
+            changes = 0
+            expense_label = t('type_expense', L)
+            income_label = t('type_income', L)
+            refund_label = t('type_refund', L)
+            
+            df = st.session_state['current_df']
+            for idx in df.index:
+                new_type = st.session_state.get(f"raw_type_{idx}", '')
+                old_amount = df.at[idx, 'Amount']
+                
+                if new_type in (income_label, refund_label) and old_amount < 0:
+                    # User says this is income/refund but amount is negative → flip to positive
+                    df.at[idx, 'Amount'] = abs(old_amount)
+                    changes += 1
+                elif new_type == expense_label and old_amount > 0:
+                    # User says this is expense but amount is positive → flip to negative
+                    df.at[idx, 'Amount'] = -abs(old_amount)
+                    changes += 1
+            
+            if changes > 0:
+                st.session_state['current_df'] = df
+                
+                # Regenerate story
+                analyst = FinancialAnalystAgent()
+                selected_month = st.session_state.get('selected_month', '')
+                story_markdown = analyst.generate_monthly_story(df, selected_month, lang=L)
+                st.session_state['story'] = story_markdown
+                
+                # Re-save history
+                full_history_df = save_to_history(df)
+                st.session_state['history_df'] = full_history_df
+                
+                st.success(t('raw_changes_saved', L, count=changes))
+                st.rerun()
+            else:
+                st.info(t('raw_no_changes', L))

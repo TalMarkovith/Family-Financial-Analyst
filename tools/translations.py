@@ -63,6 +63,24 @@ TRANSLATIONS = {
         'no_transactions': 'No transactions found for {month}. Please check your files or select a different month.',
         'select_month_error': 'Please select a month to analyze!',
         
+        # Duplicate detection
+        'dup_file_title': '⚠️ Duplicate File Detected',
+        'dup_file_desc': 'The file **{filename}** appears identical to **{original}** that was already uploaded. It has been skipped to prevent double-counting.',
+        'dup_file_history_title': '⚠️ Overlapping Data with Previous Month',
+        'dup_file_history_desc': '**{count}** transactions from this upload already exist in your history (from a previous analysis). They have been removed to prevent double-counting.',
+        'dup_txn_title': '🔍 Possible Double-Charges Detected',
+        'dup_txn_desc': 'We found **{count}** potential duplicate transactions — same merchant, same amount, same date. Please review and remove any that are accidental double-charges.',
+        'dup_txn_col_date': 'Date',
+        'dup_txn_col_merchant': 'Merchant',
+        'dup_txn_col_amount': 'Amount',
+        'dup_txn_col_source': 'Source',
+        'dup_txn_col_action': 'Action',
+        'dup_txn_keep': '✅ Keep Both',
+        'dup_txn_remove': '🗑️ Remove Duplicate',
+        'dup_txn_confirm': '✅ Confirm Selections',
+        'dup_txn_resolved': '✅ Removed {count} duplicate transactions.',
+        'dup_txn_none': 'No duplicates to remove — all marked as Keep.',
+        
         # Review panel
         'review_title': '🔍 Review New Classifications',
         'review_desc': 'These <strong>{count}</strong> merchants are new — classified by Maps API + LLM. Review and correct before saving to memory. Next time they\'ll be auto-classified!',
@@ -89,6 +107,11 @@ TRANSLATIONS = {
         'income_vs_expenses': '💰 Income vs Expenses Trend',
         'category_over_time': '📊 Category Breakdown Over Time',
         'raw_data': '🗄️ Raw Transaction Data',
+        'raw_type_header': '💡 Click on the Type column to change a transaction between Expense / Income / Refund.',
+        'raw_save_changes': '💾 Save Type Changes & Regenerate',
+        'raw_changes_saved': '✅ Updated {count} transactions. Story and charts regenerated!',
+        'raw_no_changes': 'ℹ️ No type changes detected.',
+        'type_refund': 'Refund',
         'pin_story': '📌 Pin Story',
         
         # Balance box
@@ -164,6 +187,24 @@ TRANSLATIONS = {
         'no_transactions': 'לא נמצאו עסקאות לחודש {month}. בדקו את הקבצים או בחרו חודש אחר.',
         'select_month_error': 'יש לבחור חודש לניתוח!',
         
+        # Duplicate detection
+        'dup_file_title': '⚠️ קובץ כפול זוהה',
+        'dup_file_desc': 'הקובץ **{filename}** זהה ל-**{original}** שכבר הועלה. הקובץ הכפול דולג כדי למנוע ספירה כפולה.',
+        'dup_file_history_title': '⚠️ חפיפה עם נתונים קודמים',
+        'dup_file_history_desc': '**{count}** עסקאות מההעלאה הזו כבר קיימות בהיסטוריה (מניתוח קודם). הן הוסרו כדי למנוע ספירה כפולה.',
+        'dup_txn_title': '🔍 חשד לחיובים כפולים',
+        'dup_txn_desc': 'נמצאו **{count}** עסקאות שעלולות להיות כפולות — אותו בית עסק, אותו סכום, אותו תאריך. בדקו והסירו חיובים כפולים בטעות.',
+        'dup_txn_col_date': 'תאריך',
+        'dup_txn_col_merchant': 'בית עסק',
+        'dup_txn_col_amount': 'סכום',
+        'dup_txn_col_source': 'מקור',
+        'dup_txn_col_action': 'פעולה',
+        'dup_txn_keep': '✅ שמור שניהם',
+        'dup_txn_remove': '🗑️ הסר כפול',
+        'dup_txn_confirm': '✅ אשר בחירות',
+        'dup_txn_resolved': '✅ הוסרו {count} עסקאות כפולות.',
+        'dup_txn_none': 'אין כפילויות להסרה — כולן סומנו כ\"שמור\".',
+        
         # Review panel
         'review_title': '🔍 סקירת סיווגים חדשים',
         'review_desc': '<strong>{count}</strong> בתי עסק חדשים — סווגו ע"י Maps API + LLM. בדקו ותקנו לפני שמירה בזיכרון. בפעם הבאה הם יסווגו אוטומטית!',
@@ -190,6 +231,11 @@ TRANSLATIONS = {
         'income_vs_expenses': '💰 מגמת הכנסות מול הוצאות',
         'category_over_time': '📊 פירוט קטגוריות לאורך זמן',
         'raw_data': '🗄️ נתוני עסקאות גולמיים',
+        'raw_type_header': '💡 לחצו על עמודת הסוג כדי לשנות עסקה בין הוצאה / הכנסה / החזר.',
+        'raw_save_changes': '💾 שמור שינויים וחשב מחדש',
+        'raw_changes_saved': '✅ עודכנו {count} עסקאות. הסיפור והגרפים חושבו מחדש!',
+        'raw_no_changes': 'ℹ️ לא זוהו שינויי סוג.',
+        'type_refund': 'החזר',
         'pin_story': '📌 שמור סיפור',
         
         # Balance box

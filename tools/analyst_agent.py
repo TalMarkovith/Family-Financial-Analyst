@@ -24,28 +24,31 @@ class FinancialAnalystAgent:
     def generate_monthly_story(self, current_df: pd.DataFrame, month_year: str = None, lang: str = 'he') -> str:
         """Analyzes the classified dataframe and generates a narrative story."""
         
-        # 1. Income is simply the sum of all income rows
-        income_df = current_df[current_df['Category'] == 'Income']
-        income = income_df['Amount'].abs().sum()  # Income should be positive
+        # ── Sign convention: negative = expense, positive = income/refund ──
         
-        # 2. Separate Investments and Expenses
-        # Be VERY specific about investments - only הע. לאנליסט transactions
+        # 1. Income = all positive amounts (salaries, refunds, credits)
+        income_df = current_df[current_df['Amount'] > 0]
+        income = income_df['Amount'].sum()  # Already positive
+        
+        # 2. Separate Investments from regular expenses
+        # Investments are money going out but NOT consumption — they're wealth allocation.
+        # Match by Category='Investments' OR the known אנליסט keyword as fallback.
         investments_df = current_df[
-            (current_df['Description'].str.contains('אנליסט', case=False, na=False)) &
-            (current_df['Category'] != 'Income')
+            (current_df['Amount'] < 0) &  # Investments are money going out
+            (
+                (current_df['Category'] == 'Investments') |
+                (current_df['Description'].str.contains('אנליסט', case=False, na=False))
+            )
         ]
         
         expenses_df = current_df[
-            (current_df['Category'] != 'Income') & 
+            (current_df['Amount'] < 0) &  # Only money going out
             (~current_df.index.isin(investments_df.index))
         ]
         
         # 3. Calculate totals
-        # Expenses from credit cards are already positive
-        # Expenses from bank are negative (debits) - use abs()
+        # Expenses are negative, use abs() for display
         expenses = expenses_df['Amount'].abs().sum()
-        
-        # Investments from bank are negative (debits) - use abs() to show as positive
         investments = investments_df['Amount'].abs().sum()
         
         # Debug output

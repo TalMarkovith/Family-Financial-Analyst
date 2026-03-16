@@ -1,10 +1,13 @@
 import pandas as pd
 import os
+import hashlib
 import pdfplumber
 
 class IngestionAgent:
     def __init__(self):
         self.unified_columns = ['Date', 'Description', 'Amount', 'Owner', 'Source']
+        self.file_fingerprints = {}   # filename → hash (for duplicate file detection)
+        self.duplicate_files = []     # list of (duplicate_name, original_name)
     
     def _read_pdf(self, file_path):
         """
@@ -276,9 +279,9 @@ class IngestionAgent:
                             
                             if date_col and desc_col and amount_col:
                                 df = df.rename(columns={date_col: 'Date', desc_col: 'Description', amount_col: 'Amount'})
-                                # Make amounts positive (expenses are negative in bank files)
-                                df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').abs()
-                                print(f"✓ Successfully mapped headerless bank columns")
+                                # Keep original signs: negative = expense (debit), positive = income/refund (credit)
+                                df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
+                                print(f"✓ Successfully mapped headerless bank columns (keeping original signs)")
                                 
                                 # Filter bank to only keep bank-exclusive transactions
                                 exclude_patterns = [
@@ -407,6 +410,100 @@ class IngestionAgent:
         
         raise ValueError(f"Could not parse Discount Credit Card file. Could not find required columns.")
 
+    def _compute_file_fingerprint(self, df, filename):
+        """
+        Compute a content-based fingerprint for a parsed file.
+        Uses sorted Description+Amount pairs so the hash is order-independent.
+        Returns the hash string, or None if df is empty.
+        """
+        if df is None or df.empty:
+            return None
+        # Build a canonical string from the data content
+        rows = df[['Description', 'Amount']].dropna()
+        rows = rows.astype(str)
+        # Sort so row order doesn't affect the hash
+        canonical = rows.sort_values(['Description', 'Amount']).to_csv(index=False, header=False)
+        return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+    def _check_duplicate_file(self, df, filename):
+        """
+        Check if a parsed file is a duplicate of one already seen in this session.
+        Returns (is_duplicate, original_filename).
+        """
+        fp = self._compute_file_fingerprint(df, filename)
+        if fp is None:
+            return False, None
+        
+        for prev_name, prev_fp in self.file_fingerprints.items():
+            if fp == prev_fp:
+                return True, prev_name
+        
+        self.file_fingerprints[filename] = fp
+        return False, None
+
+    @staticmethod
+    def detect_duplicate_transactions(df, date_tolerance_days=0):
+        """
+        Scan a DataFrame for potential duplicate transactions.
+        Duplicates = same Description + same absolute Amount + same Date (±tolerance).
+        
+        Returns a list of dicts, each describing a duplicate group:
+        [
+            {
+                'description': str,
+                'amount': float,
+                'date': str,
+                'source': str,
+                'indices': [int, ...],   # DataFrame indices of duplicate rows
+                'count': int,            # how many duplicates (2 = one extra)
+            },
+            ...
+        ]
+        """
+        if df is None or df.empty or len(df) < 2:
+            return []
+        
+        duplicates = []
+        seen_groups = set()  # avoid reporting same group twice
+        
+        for i, row_i in df.iterrows():
+            for j, row_j in df.iterrows():
+                if j <= i:
+                    continue
+                
+                # Same description (case-insensitive, stripped)
+                desc_i = str(row_i['Description']).strip()
+                desc_j = str(row_j['Description']).strip()
+                if desc_i.lower() != desc_j.lower():
+                    continue
+                
+                # Same amount WITH same sign — a charge (-25) and refund (+25) are NOT duplicates
+                if row_i['Amount'] != row_j['Amount']:
+                    continue
+                
+                # Same/close date
+                try:
+                    date_diff = abs((pd.Timestamp(row_i['Date']) - pd.Timestamp(row_j['Date'])).days)
+                except:
+                    continue
+                if date_diff > date_tolerance_days:
+                    continue
+                
+                # Found a duplicate pair (same merchant, same signed amount, same date)
+                group_key = (desc_i.lower(), row_i['Amount'], str(row_i['Date'])[:10])
+                if group_key not in seen_groups:
+                    seen_groups.add(group_key)
+                    duplicates.append({
+                        'description': desc_i,
+                        'amount': row_i['Amount'],
+                        'date': str(row_i['Date'])[:10],
+                        'source': f"{row_i.get('Source', '?')}",
+                        'indices': [i, j],
+                        'count': 2,
+                    })
+        
+        return duplicates
+
     def run_monthly_ingestion(self, files_list):
         """
         Orchestrator method to process multiple files and return unified DataFrame.
@@ -418,6 +515,20 @@ class IngestionAgent:
             Unified pandas DataFrame with all transactions
         """
         all_data = []
+        self.file_fingerprints = {}
+        self.duplicate_files = []
+        
+        def _add_if_not_duplicate(parsed_df, filepath):
+            """Check fingerprint before adding parsed data."""
+            if parsed_df is None or parsed_df.empty:
+                return
+            fname = os.path.basename(filepath)
+            is_dup, original = self._check_duplicate_file(parsed_df, fname)
+            if is_dup:
+                print(f"  🚫 DUPLICATE FILE: '{fname}' is identical to '{original}' — skipping!")
+                self.duplicate_files.append((fname, original))
+            else:
+                all_data.append(parsed_df)
         
         for file in files_list:
             file_lower = file.lower()
@@ -431,7 +542,7 @@ class IngestionAgent:
                 owner = "Reut" if "רעות" in file_lower else "Tal"
                 print(f"  → Identified as Max credit card (Owner: {owner})")
                 try:
-                    all_data.append(self.parse_max(file, owner))
+                    _add_if_not_duplicate(self.parse_max(file, owner), file)
                 except Exception as e:
                     print(f"  ✗ Failed to parse Max file: {e}")
             
@@ -442,7 +553,7 @@ class IngestionAgent:
                 try:
                     parsed_data = self.parse_isracard_csv(file, owner)
                     if parsed_data is not None and len(parsed_data) > 0:
-                        all_data.append(parsed_data)
+                        _add_if_not_duplicate(parsed_data, file)
                         print(f"  ✓ Successfully added {len(parsed_data)} Isracard transactions")
                     else:
                         print(f"  ⚠️ Isracard parser returned empty data")
@@ -455,7 +566,7 @@ class IngestionAgent:
             elif "4288" in file_basename:
                 print(f"  → Identified as Discount Credit Card 4288 (Owner: Tal)")
                 try:
-                    all_data.append(self.parse_discount_credit_card(file, "Tal"))
+                    _add_if_not_duplicate(self.parse_discount_credit_card(file, "Tal"), file)
                 except Exception as e:
                     print(f"  ✗ Failed to parse Discount Credit Card: {e}")
             
@@ -463,7 +574,7 @@ class IngestionAgent:
             elif "דיסקונט" in file_lower or "discount" in file_lower or "עובר ושב" in file_lower or "עו\"ש" in file_lower or "bank" in file_lower:
                 print("  → Identified as Discount bank/checking account")
                 try:
-                    all_data.append(self.parse_bank_discount(file))
+                    _add_if_not_duplicate(self.parse_bank_discount(file), file)
                 except Exception as e:
                     print(f"  ✗ Failed to parse bank file: {e}")
             
@@ -472,7 +583,7 @@ class IngestionAgent:
                 owner = "Tal" if "טל" in file_lower else "Reut" if "רעות" in file_lower else "Tal"
                 print(f"  → Identified as Credit card (Owner: {owner}, trying Isracard parser)")
                 try:
-                    all_data.append(self.parse_isracard_csv(file, owner))
+                    _add_if_not_duplicate(self.parse_isracard_csv(file, owner), file)
                 except Exception as e:
                     print(f"  ✗ Failed to parse credit card file: {e}")
             
@@ -482,7 +593,7 @@ class IngestionAgent:
                 print(f"  💡 Tip: For better results, export as CSV/Excel from your bank's website")
                 try:
                     # Try to parse PDF anyway
-                    all_data.append(self.parse_isracard_csv(file, "Tal"))
+                    _add_if_not_duplicate(self.parse_isracard_csv(file, "Tal"), file)
                 except Exception as e:
                     print(f"  ✗ PDF parsing failed: {e}")
                     print(f"  → Skipping this file. Please convert to Excel/CSV format.")
@@ -495,7 +606,7 @@ class IngestionAgent:
                     df_test = self._read_file(file, skiprows=0)
                     if df_test is not None and len(df_test) > 0:
                         # Try Isracard parser (most flexible)
-                        all_data.append(self.parse_isracard_csv(file, "Tal"))
+                        _add_if_not_duplicate(self.parse_isracard_csv(file, "Tal"), file)
                         print(f"  ✓ Successfully parsed with Isracard parser")
                     else:
                         print(f"  ✗ Failed to parse file")
@@ -513,6 +624,31 @@ class IngestionAgent:
         
         # Drop rows where Amount is NaN (invalid amounts)
         df = df.dropna(subset=['Amount'])
+        
+        # ── Normalize sign convention ──
+        # Unified rule: negative = money out (expense), positive = money in (income/refund)
+        #
+        # Bank files already follow this convention (debit=negative, credit=positive).
+        # Credit card files report charges as POSITIVE numbers — negate them so
+        # a ₪100 charge becomes -100 and a -₪50 refund becomes +50.
+        cc_sources = ['Max', 'Isracard', 'Discount_Credit_Card']
+        cc_mask = df['Source'].isin(cc_sources)
+        if cc_mask.any():
+            before_sample = df.loc[cc_mask, 'Amount'].head(3).tolist()
+            df.loc[cc_mask, 'Amount'] = df.loc[cc_mask, 'Amount'] * -1
+            after_sample = df.loc[cc_mask, 'Amount'].head(3).tolist()
+            print(f"\n🔄 Sign normalization: CC amounts negated (charges → negative)")
+            print(f"   Before: {before_sample}  →  After: {after_sample}")
+        
+        bank_mask = df['Source'].str.contains('Bank', case=False, na=False)
+        if bank_mask.any():
+            print(f"   Bank amounts kept as-is (already negative=expense, positive=income)")
+            print(f"   Sample bank amounts: {df.loc[bank_mask, 'Amount'].head(5).tolist()}")
+        
+        print(f"\n📊 Amount sign summary:")
+        print(f"   Negative (expenses): {(df['Amount'] < 0).sum()} transactions")
+        print(f"   Positive (income/refunds): {(df['Amount'] > 0).sum()} transactions")
+        print(f"   Zero: {(df['Amount'] == 0).sum()} transactions")
         
         # Clean and standardize Date column
         # Handle various date formats (DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD, etc.)
