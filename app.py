@@ -1300,8 +1300,11 @@ if 'current_df' in st.session_state:
             
             st.markdown("---")
             
+            # Create a separate dataframe for expense categories only (exclude Income for this chart)
+            hist_df_expenses = hist_df[~hist_df['Category'].isin(['Income', 'הכנסות', 'Investments', 'השקעות'])].copy()
+            
             # Group by Month and Category for detailed breakdown
-            hist_grouped = hist_df.groupby(['Month_Year', 'Category'])['Amount'].apply(
+            hist_grouped = hist_df_expenses.groupby(['Month_Year', 'Category'])['Amount'].apply(
                 lambda x: x.abs().sum()
             ).reset_index()
             
