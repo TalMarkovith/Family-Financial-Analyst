@@ -16,6 +16,27 @@ from tools.classify_dataframe import classify_dataframe, save_approved_to_memory
 from tools.analyst_agent import FinancialAnalystAgent
 from tools.balance_tracker import load_balance, get_avg_savings_rate
 
+# Global taxonomy for category/sub-category dropdowns
+TAXONOMY = {
+    'Housing_Fixed': ['Rent_Mortgage', 'Utilities_Arnona_Elec_Water_Gas', 'Communication', 'Maintenance_Vaad_Cleaner'],
+    'Insurance_Health': ['Insurances', 'Kupat_Holim', 'Private_Medical'],
+    'Kids_Family': ['Gan_Education', 'Baby_Equipment_Pharm', 'Kids_Clothing_Toys'],
+    'Transportation': ['Car_Gas_Tolls', 'Public_Transit_Taxi', 'Parking_Tolls', 'Car_Maintenance_Licensing'],
+    'Variable_Daily': ['Groceries_Supermarket', 'Dining_Restaurants_Wolt', 'Home_Furniture_Decor', 'Clothing_Shoes', 'Gifts_Events', 'General_Shopping'],
+    'Leisure_Grooming': ['Subscriptions', 'Personal_Care_Hair_Nails', 'Hobbies_Entertainment_Vacation'],
+    'Food': ['Groceries_Supermarket', 'Coffee_Restaurants'],
+    'Food_Delivery': ['Dining_Restaurants_Wolt'],
+    'Pharm': ['Pharm'],
+    'Health': ['Medical_Insurance', 'sport_club_gym'],
+    'Insurance': ['Life_Insurance', 'Medical_Private_Insurance'],
+    'Home': ['Direct_Online_Shopping'],
+    'Investments': ['Savings_Analyst_Brokerage'],
+    'Income': ['Tal_Salary', 'Reut_Salary', 'Other_Income_Bit'],
+    'Rio': ['Rio_Food', 'Rio_Health', 'Rio_Accessories'],
+    'Leisure': ['Tal_Specials'],
+}
+ALL_CATEGORIES = list(TAXONOMY.keys())
+
 # Initialize session state for pinned insights
 if 'pinned_insights' not in st.session_state:
     st.session_state.pinned_insights = []
@@ -801,19 +822,16 @@ if run_button and uploaded_files:
                 st.warning(t('no_income_warning', L))
             
             # Phase 3 - Save to History
-            my_bar.progress(75, text=t('progress_history', L))
+            my_bar.progress(85, text=t('progress_history', L))
             full_history_df = save_to_history(final_classified_df)
             
-            # Phase 4 - Generate LLM Insights
-            my_bar.progress(90, text=t('progress_story', L))
-            analyst = FinancialAnalystAgent()
-            story_markdown = analyst.generate_monthly_story(final_classified_df, selected_month, lang=L)
-            
+            # Phase 4 - Skip LLM for now, let user review first
             my_bar.progress(100, text=t('progress_complete', L))
             st.session_state['current_df'] = final_classified_df
             st.session_state['history_df'] = full_history_df
-            st.session_state['story'] = story_markdown
+            st.session_state['story'] = None  # No story yet - user needs to review and approve first
             st.session_state['selected_month'] = selected_month
+            st.session_state['analysis_pending'] = True  # Flag to show "Run Analysis" button
             
             # Store pending reviews for the review UI
             if pending_reviews:
@@ -942,27 +960,7 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
     </div>
     """.format(dir=_dir, align=_align, title=t('review_title', L), desc=t('review_desc', L, count=len(reviews))), unsafe_allow_html=True)
     
-    # Define the taxonomy for dropdowns
-    TAXONOMY = {
-        'Housing_Fixed': ['Rent_Mortgage', 'Utilities_Arnona_Elec_Water_Gas', 'Communication', 'Maintenance_Vaad_Cleaner'],
-        'Insurance_Health': ['Insurances', 'Kupat_Holim', 'Private_Medical'],
-        'Kids_Family': ['Gan_Education', 'Baby_Equipment_Pharm', 'Kids_Clothing_Toys'],
-        'Transportation': ['Car_Gas_Tolls', 'Public_Transit_Taxi', 'Parking_Tolls', 'Car_Maintenance_Licensing'],
-        'Variable_Daily': ['Groceries_Supermarket', 'Dining_Restaurants_Wolt', 'Home_Furniture_Decor', 'Clothing_Shoes', 'Gifts_Events', 'General_Shopping'],
-        'Leisure_Grooming': ['Subscriptions', 'Personal_Care_Hair_Nails', 'Hobbies_Entertainment_Vacation'],
-        'Food': ['Groceries_Supermarket', 'Coffee_Restaurants'],
-        'Food_Delivery': ['Dining_Restaurants_Wolt'],
-        'Pharm': ['Pharm'],
-        'Health': ['Medical_Insurance', 'sport_club_gym'],
-        'Insurance': ['Life_Insurance', 'Medical_Private_Insurance'],
-        'Home': ['Direct_Online_Shopping'],
-        'Investments': ['Savings_Analyst_Brokerage'],
-        'Income': ['Tal_Salary', 'Reut_Salary', 'Other_Income_Bit'],
-        'Rio': ['Rio_Food', 'Rio_Health', 'Rio_Accessories'],
-        'Leisure': ['Tal_Specials'],
-    }
-    
-    all_categories = list(TAXONOMY.keys())
+    # Use global TAXONOMY and ALL_CATEGORIES
     
     # Build the review table data
     review_data = []
@@ -1022,13 +1020,12 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
         
         with cols[3]:
             # Category dropdown — all categories available (type is independent of category)
-            available_cats = all_categories
             
             default_cat = item['ai_category']
-            cat_idx = available_cats.index(default_cat) if default_cat in available_cats else 0
+            cat_idx = ALL_CATEGORIES.index(default_cat) if default_cat in ALL_CATEGORIES else 0
             new_cat = st.selectbox(
                 "Category",
-                available_cats,
+                ALL_CATEGORIES,
                 index=cat_idx,
                 format_func=lambda x: cat_display(x, L),
                 key=f"review_cat_{item['idx']}",
@@ -1114,23 +1111,52 @@ if 'current_df' in st.session_state:
     with tab1:
         st.markdown(f"### {t('story_header', L)}")
         
-        # Pin button for the story
-        col_pin, col_empty = st.columns([1, 5])
-        with col_pin:
-            if st.button(t('pin_story', L), key="pin_story"):
-                st.session_state.pinned_insights.append({
-                    'type': 'story',
-                    'content': st.session_state["story"],
-                    'month': st.session_state.get('selected_month', 'Unknown')
-                })
-                # Save to file
-                import json
-                os.makedirs("data/processed", exist_ok=True)
-                with open("data/processed/pinned_insights.json", 'w', encoding='utf-8') as f:
-                    json.dump(st.session_state.pinned_insights, f, ensure_ascii=False, indent=2)
-                st.success("Story pinned!")
-        
-        st.markdown(f'<div class="analyst-story">{st.session_state["story"]}</div>', unsafe_allow_html=True)
+        # Check if analysis has been run yet
+        if st.session_state.get('story') is None or st.session_state.get('analysis_pending', False):
+            # Show prompt to review data and run analysis
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); 
+                        border: 2px solid #6c5ce7; border-radius: 16px; padding: 24px; margin: 16px 0;
+                        text-align: center;">
+                <h3 style="color: #a29bfe; margin-top: 0;">📋 {title}</h3>
+                <p style="color: #dfe6e9; font-size: 1rem;">
+                    {desc}
+                </p>
+            </div>
+            """.format(
+                title="סקור את הנתונים לפני הניתוח" if L == 'he' else "Review Data Before Analysis",
+                desc="עבור ללשונית 'נתונים גולמיים' כדי לבדוק ולתקן את הסיווגים. כשתהיה מוכן, לחץ על הכפתור למטה כדי לייצר את הניתוח החודשי." if L == 'he' else "Go to the 'Raw Data' tab to review and fix classifications. When ready, click the button below to generate the monthly analysis."
+            ), unsafe_allow_html=True)
+            
+            analyze_btn_label = "🚀 הפעל ניתוח AI" if L == 'he' else "🚀 Run AI Analysis"
+            if st.button(analyze_btn_label, type="primary", use_container_width=True, key="run_analysis_main"):
+                with st.spinner("מייצר ניתוח חודשי..." if L == 'he' else "Generating monthly analysis..."):
+                    df = st.session_state['current_df']
+                    analyst = FinancialAnalystAgent()
+                    selected_month = st.session_state.get('selected_month', '')
+                    story_markdown = analyst.generate_monthly_story(df, selected_month, lang=L)
+                    st.session_state['story'] = story_markdown
+                    st.session_state['analysis_pending'] = False
+                    st.success("✅ " + ("הניתוח הושלם!" if L == 'he' else "Analysis complete!"))
+                    st.rerun()
+        else:
+            # Show the story with pin button
+            col_pin, col_empty = st.columns([1, 5])
+            with col_pin:
+                if st.button(t('pin_story', L), key="pin_story"):
+                    st.session_state.pinned_insights.append({
+                        'type': 'story',
+                        'content': st.session_state["story"],
+                        'month': st.session_state.get('selected_month', 'Unknown')
+                    })
+                    # Save to file
+                    import json
+                    os.makedirs("data/processed", exist_ok=True)
+                    with open("data/processed/pinned_insights.json", 'w', encoding='utf-8') as f:
+                        json.dump(st.session_state.pinned_insights, f, ensure_ascii=False, indent=2)
+                    st.success("Story pinned!")
+            
+            st.markdown(f'<div class="analyst-story">{st.session_state["story"]}</div>', unsafe_allow_html=True)
         
         st.markdown("---")
         st.markdown(f"### {t('visual_breakdown', L)}")
@@ -1352,7 +1378,7 @@ if 'current_df' in st.session_state:
         st.header(t('raw_data', L))
         st.info(t('raw_type_header', L))
         
-        # Build display dataframe with translated labels and a Type column
+        # Build display dataframe
         table_df = curr_df.copy()
         
         # Derive Type from amount sign
@@ -1362,38 +1388,62 @@ if 'current_df' in st.session_state:
             else:
                 return t('type_expense', L)
         
-        table_df['_display_cat'] = table_df['Category'].apply(lambda x: cat_display(x, L))
-        table_df['_display_sub'] = table_df['Sub_Category'].apply(lambda x: sub_display(x, L))
-        
         type_options = [t('type_expense', L), t('type_income', L), t('type_refund', L)]
         
-        # Table header
-        raw_hdr = st.columns([1.2, 3, 1.2, 1, 2, 2])
+        # Initialize rows to delete in session state
+        if 'rows_to_delete' not in st.session_state:
+            st.session_state.rows_to_delete = set()
+        
+        # Table header with improved column widths
+        raw_hdr = st.columns([0.5, 1.2, 2.5, 1.0, 1.0, 1.8, 1.8])
         with raw_hdr[0]:
-            st.markdown(f"**{t('dup_txn_col_date', L)}**")
+            st.markdown("**🗑️**")
         with raw_hdr[1]:
-            st.markdown(f"**{t('col_merchant', L)}**")
+            st.markdown(f"**{t('dup_txn_col_date', L)}**")
         with raw_hdr[2]:
-            st.markdown(f"**{t('col_amount', L)}**")
+            st.markdown(f"**{t('col_merchant', L)}**")
         with raw_hdr[3]:
-            st.markdown(f"**{t('col_type', L)}**")
+            st.markdown(f"**{t('col_amount', L)}**")
         with raw_hdr[4]:
-            st.markdown(f"**{t('col_category', L)}**")
+            st.markdown(f"**{t('col_type', L)}**")
         with raw_hdr[5]:
+            st.markdown(f"**{t('col_category', L)}**")
+        with raw_hdr[6]:
             st.markdown(f"**{t('col_subcategory', L)}**")
         
         st.markdown("<hr style='margin: 4px 0; border-color: #333;'>", unsafe_allow_html=True)
         
-        # Show each row with editable type
+        # Show each row with editable fields
         for idx, row in table_df.iterrows():
-            row_cols = st.columns([1.2, 3, 1.2, 1, 2, 2])
+            row_cols = st.columns([0.5, 1.2, 2.5, 1.0, 1.0, 1.8, 1.8])
+            
+            # Delete checkbox
             with row_cols[0]:
-                st.markdown(f"<small>{str(row['Date'])[:10]}</small>", unsafe_allow_html=True)
+                delete_checked = st.checkbox(
+                    "del",
+                    value=idx in st.session_state.rows_to_delete,
+                    key=f"raw_delete_{idx}",
+                    label_visibility="collapsed"
+                )
+                if delete_checked:
+                    st.session_state.rows_to_delete.add(idx)
+                elif idx in st.session_state.rows_to_delete:
+                    st.session_state.rows_to_delete.discard(idx)
+            
+            # Date
             with row_cols[1]:
-                st.markdown(f"<small>{str(row['Description'])[:40]}</small>", unsafe_allow_html=True)
+                st.markdown(f"{str(row['Date'])[:10]}")
+            
+            # Description/Merchant
             with row_cols[2]:
-                st.markdown(f"<small>₪{abs(row['Amount']):,.0f}</small>", unsafe_allow_html=True)
+                st.markdown(f"{str(row['Description'])[:50]}")
+            
+            # Amount
             with row_cols[3]:
+                st.markdown(f"₪{abs(row['Amount']):,.0f}")
+            
+            # Type dropdown
+            with row_cols[4]:
                 current_type = _get_type_label(row['Amount'])
                 type_idx = type_options.index(current_type) if current_type in type_options else 0
                 st.selectbox(
@@ -1403,46 +1453,121 @@ if 'current_df' in st.session_state:
                     key=f"raw_type_{idx}",
                     label_visibility="collapsed",
                 )
-            with row_cols[4]:
-                st.markdown(f"<small>{row['_display_cat']}</small>", unsafe_allow_html=True)
+            
+            # Category dropdown
             with row_cols[5]:
-                st.markdown(f"<small>{row['_display_sub']}</small>", unsafe_allow_html=True)
+                current_cat = row['Category']
+                cat_idx = ALL_CATEGORIES.index(current_cat) if current_cat in ALL_CATEGORIES else 0
+                st.selectbox(
+                    "cat",
+                    ALL_CATEGORIES,
+                    index=cat_idx,
+                    format_func=lambda x: cat_display(x, L),
+                    key=f"raw_cat_{idx}",
+                    label_visibility="collapsed",
+                )
+            
+            # Sub-Category dropdown (depends on selected category)
+            with row_cols[6]:
+                selected_cat = st.session_state.get(f"raw_cat_{idx}", current_cat)
+                sub_options = TAXONOMY.get(selected_cat, ['Unknown'])
+                current_sub = row['Sub_Category']
+                sub_idx = sub_options.index(current_sub) if current_sub in sub_options else 0
+                st.selectbox(
+                    "sub",
+                    sub_options,
+                    index=sub_idx,
+                    format_func=lambda x: sub_display(x, L),
+                    key=f"raw_sub_{idx}",
+                    label_visibility="collapsed",
+                )
         
-        # Save button
-        if st.button(t('raw_save_changes', L), type="primary", use_container_width=True):
-            changes = 0
-            expense_label = t('type_expense', L)
-            income_label = t('type_income', L)
-            refund_label = t('type_refund', L)
-            
-            df = st.session_state['current_df']
-            for idx in df.index:
-                new_type = st.session_state.get(f"raw_type_{idx}", '')
-                old_amount = df.at[idx, 'Amount']
+        st.markdown("---")
+        
+        # Show count of rows marked for deletion
+        delete_count = len(st.session_state.rows_to_delete)
+        if delete_count > 0:
+            st.warning(f"🗑️ {delete_count} {'שורות מסומנות למחיקה' if L == 'he' else 'rows marked for deletion'}")
+        
+        # Action buttons
+        col_save, col_analyze = st.columns(2)
+        
+        with col_save:
+            if st.button(t('raw_save_changes', L), type="primary", use_container_width=True):
+                changes = 0
+                cat_changes = 0
+                deleted = 0
+                expense_label = t('type_expense', L)
+                income_label = t('type_income', L)
+                refund_label = t('type_refund', L)
                 
-                if new_type in (income_label, refund_label) and old_amount < 0:
-                    # User says this is income/refund but amount is negative → flip to positive
-                    df.at[idx, 'Amount'] = abs(old_amount)
-                    changes += 1
-                elif new_type == expense_label and old_amount > 0:
-                    # User says this is expense but amount is positive → flip to negative
-                    df.at[idx, 'Amount'] = -abs(old_amount)
-                    changes += 1
-            
-            if changes > 0:
+                df = st.session_state['current_df'].copy()
+                
+                # First, delete marked rows
+                if st.session_state.rows_to_delete:
+                    valid_indices = [i for i in st.session_state.rows_to_delete if i in df.index]
+                    if valid_indices:
+                        df = df.drop(index=valid_indices)
+                        deleted = len(valid_indices)
+                    st.session_state.rows_to_delete = set()
+                
+                # Apply type, category, and sub-category changes
+                for idx in df.index:
+                    # Type changes
+                    new_type = st.session_state.get(f"raw_type_{idx}", '')
+                    old_amount = df.at[idx, 'Amount']
+                    
+                    if new_type in (income_label, refund_label) and old_amount < 0:
+                        df.at[idx, 'Amount'] = abs(old_amount)
+                        changes += 1
+                    elif new_type == expense_label and old_amount > 0:
+                        df.at[idx, 'Amount'] = -abs(old_amount)
+                        changes += 1
+                    
+                    # Category changes
+                    new_cat = st.session_state.get(f"raw_cat_{idx}", '')
+                    if new_cat and new_cat != df.at[idx, 'Category']:
+                        df.at[idx, 'Category'] = new_cat
+                        cat_changes += 1
+                    
+                    # Sub-category changes
+                    new_sub = st.session_state.get(f"raw_sub_{idx}", '')
+                    if new_sub and new_sub != df.at[idx, 'Sub_Category']:
+                        df.at[idx, 'Sub_Category'] = new_sub
+                        cat_changes += 1
+                
+                df = df.reset_index(drop=True)
                 st.session_state['current_df'] = df
                 
-                # Regenerate story
-                analyst = FinancialAnalystAgent()
-                selected_month = st.session_state.get('selected_month', '')
-                story_markdown = analyst.generate_monthly_story(df, selected_month, lang=L)
-                st.session_state['story'] = story_markdown
-                
-                # Re-save history
+                # Save to history (but don't regenerate story yet)
                 full_history_df = save_to_history(df)
                 st.session_state['history_df'] = full_history_df
                 
-                st.success(t('raw_changes_saved', L, count=changes))
+                # Show summary
+                msg_parts = []
+                if deleted > 0:
+                    msg_parts.append(f"{'נמחקו' if L == 'he' else 'Deleted'} {deleted}")
+                if changes > 0:
+                    msg_parts.append(f"{'שונה סוג' if L == 'he' else 'Type changed'} {changes}")
+                if cat_changes > 0:
+                    msg_parts.append(f"{'שונה קטגוריה' if L == 'he' else 'Category changed'} {cat_changes}")
+                
+                if msg_parts:
+                    st.success(" | ".join(msg_parts))
+                    st.info("💡 " + ("לחץ 'עדכן ניתוח' כדי לעדכן את הסיפור החודשי" if L == 'he' else "Click 'Update Analysis' to regenerate the monthly story"))
+                else:
+                    st.info(t('raw_no_changes', L))
+                
                 st.rerun()
-            else:
-                st.info(t('raw_no_changes', L))
+        
+        with col_analyze:
+            analyze_label = "🔄 עדכן ניתוח" if L == 'he' else "🔄 Update Analysis"
+            if st.button(analyze_label, type="secondary", use_container_width=True):
+                with st.spinner("מייצר ניתוח חדש..." if L == 'he' else "Generating new analysis..."):
+                    df = st.session_state['current_df']
+                    analyst = FinancialAnalystAgent()
+                    selected_month = st.session_state.get('selected_month', '')
+                    story_markdown = analyst.generate_monthly_story(df, selected_month, lang=L)
+                    st.session_state['story'] = story_markdown
+                    st.success("✅ " + ("הניתוח עודכן!" if L == 'he' else "Analysis updated!"))
+                    st.rerun()
