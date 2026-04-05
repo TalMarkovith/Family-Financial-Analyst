@@ -8,7 +8,7 @@ from utils.ssl_fix import setup_ssl_certificates
 setup_ssl_certificates()
 
 # Import the updated prompt from your prompts file
-from agents.prompts import FINANCIAL_TAXONOMY_PROMPT
+from local_prompts.prompts import FINANCIAL_TAXONOMY_PROMPT
 from tools.maps_lookup import get_merchant_context
 
 # Load the environment variables from the .env file

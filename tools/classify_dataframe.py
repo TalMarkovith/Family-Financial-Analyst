@@ -1,8 +1,12 @@
 import pandas as pd
 import json
 import os
+import sys
 from dotenv import load_dotenv
 from openai import AzureOpenAI
+
+# Ensure local packages are found before site-packages
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Fix SSL certificates for corporate proxy (Netskope)
 from utils.ssl_fix import setup_ssl_certificates
@@ -12,7 +16,7 @@ load_dotenv()
 
 from tools.maps_lookup import get_merchant_context
 from tools.memory_manager import MemoryManager
-from agents.prompts import FINANCIAL_TAXONOMY_PROMPT
+from local_prompts.prompts import FINANCIAL_TAXONOMY_PROMPT
 
 def classify_dataframe(df):
     """
