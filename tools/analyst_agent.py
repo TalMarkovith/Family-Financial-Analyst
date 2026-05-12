@@ -25,25 +25,35 @@ class FinancialAnalystAgent:
         """Analyzes the classified dataframe and generates a narrative story."""
         
         # ── Sign convention: negative = expense, positive = income/refund ──
+        # ── Excluded=True transactions are SKIPPED from all calculations ──
+        
+        # Ensure Excluded column exists
+        if 'Excluded' not in current_df.columns:
+            current_df = current_df.copy()
+            current_df['Excluded'] = False
+        
+        # Filter out excluded rows from ALL calculations
+        active_df = current_df[~current_df['Excluded'].fillna(False).astype(bool)]
+        excluded_count = len(current_df) - len(active_df)
         
         # 1. Income = all positive amounts (salaries, refunds, credits)
-        income_df = current_df[current_df['Amount'] > 0]
+        income_df = active_df[active_df['Amount'] > 0]
         income = income_df['Amount'].sum()  # Already positive
         
         # 2. Separate Investments from regular expenses
         # Investments are money going out but NOT consumption — they're wealth allocation.
         # Match by Category='Investments' OR the known אנליסט keyword as fallback.
-        investments_df = current_df[
-            (current_df['Amount'] < 0) &  # Investments are money going out
+        investments_df = active_df[
+            (active_df['Amount'] < 0) &  # Investments are money going out
             (
-                (current_df['Category'] == 'Investments') |
-                (current_df['Description'].str.contains('אנליסט', case=False, na=False))
+                (active_df['Category'] == 'Investments') |
+                (active_df['Description'].str.contains('אנליסט', case=False, na=False))
             )
         ]
         
-        expenses_df = current_df[
-            (current_df['Amount'] < 0) &  # Only money going out
-            (~current_df.index.isin(investments_df.index))
+        expenses_df = active_df[
+            (active_df['Amount'] < 0) &  # Only money going out
+            (~active_df.index.isin(investments_df.index))
         ]
         
         # 3. Calculate totals
@@ -53,6 +63,8 @@ class FinancialAnalystAgent:
         
         # Debug output
         print(f"\n💰 Financial Breakdown:")
+        if excluded_count > 0:
+            print(f"  ⚠️  Excluded from calculations: {excluded_count} transactions (marked 'Don't Count')")
         print(f"  Total Income: ₪{income:,.2f}")
         print(f"  Total Expenses: ₪{expenses:,.2f} ({len(expenses_df)} transactions)")
         print(f"  Total Investments: ₪{investments:,.2f} ({len(investments_df)} transactions)")

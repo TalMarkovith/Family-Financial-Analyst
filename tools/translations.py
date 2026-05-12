@@ -107,11 +107,12 @@ TRANSLATIONS = {
         'income_vs_expenses': '💰 Income vs Expenses Trend',
         'category_over_time': '📊 Category Breakdown Over Time',
         'raw_data': '🗄️ Raw Transaction Data',
-        'raw_type_header': '💡 Click on the Type column to change a transaction between Expense / Income / Refund.',
+        'raw_type_header': '💡 Click on the Type column to change a transaction between Expense / Income / Refund / Don\'t Count.',
         'raw_save_changes': '💾 Save Type Changes & Regenerate',
         'raw_changes_saved': '✅ Updated {count} transactions. Story and charts regenerated!',
         'raw_no_changes': 'ℹ️ No type changes detected.',
         'type_refund': 'Refund',
+        'type_dont_count': "Don't Count",
         'pin_story': '📌 Pin Story',
         
         # Balance box
@@ -231,11 +232,12 @@ TRANSLATIONS = {
         'income_vs_expenses': '💰 מגמת הכנסות מול הוצאות',
         'category_over_time': '📊 פירוט קטגוריות לאורך זמן',
         'raw_data': '🗄️ נתוני עסקאות גולמיים',
-        'raw_type_header': '💡 לחצו על עמודת הסוג כדי לשנות עסקה בין הוצאה / הכנסה / החזר.',
+        'raw_type_header': '💡 לחצו על עמודת הסוג כדי לשנות עסקה בין הוצאה / הכנסה / החזר / לא לספור.',
         'raw_save_changes': '💾 שמור שינויים וחשב מחדש',
         'raw_changes_saved': '✅ עודכנו {count} עסקאות. הסיפור והגרפים חושבו מחדש!',
         'raw_no_changes': 'ℹ️ לא זוהו שינויי סוג.',
         'type_refund': 'החזר',
+        'type_dont_count': 'לא לספור',
         'pin_story': '📌 שמור סיפור',
         
         # Balance box

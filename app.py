@@ -1164,10 +1164,14 @@ if 'current_df' in st.session_state:
         
         # Filter to expenses only (negative amounts = money out)
         # Exclude investments (Category='Investments' or אנליסט keyword)
+        # Exclude rows marked "Don't Count"
+        if 'Excluded' not in curr_df.columns:
+            curr_df['Excluded'] = False
         expenses_only = curr_df[
             (curr_df['Amount'] < 0) &
             (curr_df['Category'] != 'Investments') &
-            (~curr_df['Description'].str.contains('אנליסט', case=False, na=False))
+            (~curr_df['Description'].str.contains('אנליסט', case=False, na=False)) &
+            (~curr_df['Excluded'].fillna(False).astype(bool))
         ].copy()
         expenses_only['Amount'] = expenses_only['Amount'].abs()
         # Translate category/sub-category labels for charts
@@ -1265,9 +1269,13 @@ if 'current_df' in st.session_state:
             # Remove any 'NaT' or invalid month_year values
             hist_df = hist_df[hist_df['Month_Year'] != 'NaT']
             # Exclude investment transfers (Category='Investments' or אנליסט keyword)
+            # Also exclude rows marked "Don't Count"
+            if 'Excluded' not in hist_df.columns:
+                hist_df['Excluded'] = False
             hist_df = hist_df[
                 (hist_df['Category'] != 'Investments') &
-                (~hist_df['Description'].astype(str).str.contains('אנליסט', case=False, na=False))
+                (~hist_df['Description'].astype(str).str.contains('אנליסט', case=False, na=False)) &
+                (~hist_df['Excluded'].fillna(False).astype(bool))
             ]
             # Translate category/sub-category labels for charts and table
             hist_df['Category'] = hist_df['Category'].apply(lambda x: cat_display(x, L))
@@ -1381,14 +1389,22 @@ if 'current_df' in st.session_state:
         # Build display dataframe
         table_df = curr_df.copy()
         
-        # Derive Type from amount sign
-        def _get_type_label(amount):
+        # Ensure Excluded column exists
+        if 'Excluded' not in table_df.columns:
+            table_df['Excluded'] = False
+        if 'Excluded' not in st.session_state['current_df'].columns:
+            st.session_state['current_df']['Excluded'] = False
+        
+        # Derive Type from amount sign and Excluded flag
+        def _get_type_label(amount, excluded=False):
+            if excluded:
+                return t('type_dont_count', L)
             if amount > 0:
                 return t('type_income', L)
             else:
                 return t('type_expense', L)
         
-        type_options = [t('type_expense', L), t('type_income', L), t('type_refund', L)]
+        type_options = [t('type_expense', L), t('type_income', L), t('type_refund', L), t('type_dont_count', L)]
         
         # Initialize rows to delete in session state
         if 'rows_to_delete' not in st.session_state:
@@ -1444,7 +1460,8 @@ if 'current_df' in st.session_state:
             
             # Type dropdown
             with row_cols[4]:
-                current_type = _get_type_label(row['Amount'])
+                excluded = bool(row.get('Excluded', False))
+                current_type = _get_type_label(row['Amount'], excluded)
                 type_idx = type_options.index(current_type) if current_type in type_options else 0
                 st.selectbox(
                     "type",
@@ -1496,12 +1513,18 @@ if 'current_df' in st.session_state:
             if st.button(t('raw_save_changes', L), type="primary", use_container_width=True):
                 changes = 0
                 cat_changes = 0
+                excluded_changes = 0
                 deleted = 0
                 expense_label = t('type_expense', L)
                 income_label = t('type_income', L)
                 refund_label = t('type_refund', L)
+                dont_count_label = t('type_dont_count', L)
                 
                 df = st.session_state['current_df'].copy()
+                
+                # Ensure Excluded column exists
+                if 'Excluded' not in df.columns:
+                    df['Excluded'] = False
                 
                 # First, delete marked rows
                 if st.session_state.rows_to_delete:
@@ -1513,16 +1536,29 @@ if 'current_df' in st.session_state:
                 
                 # Apply type, category, and sub-category changes
                 for idx in df.index:
-                    # Type changes
+                    # Type changes (including Don't Count toggle)
                     new_type = st.session_state.get(f"raw_type_{idx}", '')
                     old_amount = df.at[idx, 'Amount']
+                    was_excluded = bool(df.at[idx, 'Excluded'])
                     
-                    if new_type in (income_label, refund_label) and old_amount < 0:
-                        df.at[idx, 'Amount'] = abs(old_amount)
-                        changes += 1
-                    elif new_type == expense_label and old_amount > 0:
-                        df.at[idx, 'Amount'] = -abs(old_amount)
-                        changes += 1
+                    if new_type == dont_count_label:
+                        # Mark as excluded — keep amount sign as-is
+                        if not was_excluded:
+                            df.at[idx, 'Excluded'] = True
+                            excluded_changes += 1
+                    else:
+                        # Non-excluded type — clear the flag if it was set
+                        if was_excluded:
+                            df.at[idx, 'Excluded'] = False
+                            excluded_changes += 1
+                        
+                        # Then handle sign changes
+                        if new_type in (income_label, refund_label) and old_amount < 0:
+                            df.at[idx, 'Amount'] = abs(old_amount)
+                            changes += 1
+                        elif new_type == expense_label and old_amount > 0:
+                            df.at[idx, 'Amount'] = -abs(old_amount)
+                            changes += 1
                     
                     # Category changes
                     new_cat = st.session_state.get(f"raw_cat_{idx}", '')
@@ -1549,6 +1585,8 @@ if 'current_df' in st.session_state:
                     msg_parts.append(f"{'נמחקו' if L == 'he' else 'Deleted'} {deleted}")
                 if changes > 0:
                     msg_parts.append(f"{'שונה סוג' if L == 'he' else 'Type changed'} {changes}")
+                if excluded_changes > 0:
+                    msg_parts.append(f"{'סומנו לא לספור' if L == 'he' else 'Excluded'} {excluded_changes}")
                 if cat_changes > 0:
                     msg_parts.append(f"{'שונה קטגוריה' if L == 'he' else 'Category changed'} {cat_changes}")
                 
