@@ -78,9 +78,28 @@ def classify_dataframe(df):
         
         print(f"[{index+1}/{total_transactions}] Processing: {merchant[:40]}...")
         
-        # 0. Quick check for salary keywords (Hebrew)
+        # 0. Keyword constants — substring match for known recurring charges
+        # CRITICAL: must run BEFORE the salary heuristic, because the salary
+        # heuristic 'משכורת' substring matching used to mis-fire on 'משכנתא'
+        # (mortgage). Specific keyword constants are authoritative.
+        keyword_matched = False
+        for keyword, kw_cat, kw_sub in KEYWORD_CONSTANTS:
+            if keyword in merchant:
+                cat, sub_cat = kw_cat, kw_sub
+                print(f"   ✓ Keyword match! '{keyword}' → {cat}/{sub_cat}")
+                categories.append(cat)
+                sub_categories.append(sub_cat)
+                memory_hits += 1
+                keyword_matched = True
+                break
+        if keyword_matched:
+            continue
+        
+        # 0.5 Salary detection (Hebrew). NB: do NOT use the prefix 'משכ' here —
+        # it also matches 'משכנתא' (mortgage) and silently mislabels mortgage
+        # payments as Income. Keep only the full words.
         merchant_lower = merchant.lower()
-        salary_keywords = ['משכורת', 'משכ', 'שכר']
+        salary_keywords = ['משכורת', 'שכר']
         is_salary = any(keyword in merchant_lower for keyword in salary_keywords)
         
         if is_salary:
@@ -97,22 +116,6 @@ def classify_dataframe(df):
             categories.append(cat)
             sub_categories.append(sub_cat)
             memory_hits += 1
-            continue
-        
-        # 0.5. Keyword constants — substring match for known recurring charges
-        # Catches entries like "הו"ק לאורן ויפאת שפי לסניף 14-350" that have
-        # appended branch info and score just below vector threshold (0.8892)
-        keyword_matched = False
-        for keyword, kw_cat, kw_sub in KEYWORD_CONSTANTS:
-            if keyword in merchant:
-                cat, sub_cat = kw_cat, kw_sub
-                print(f"   ✓ Keyword match! '{keyword}' → {cat}/{sub_cat}")
-                categories.append(cat)
-                sub_categories.append(sub_cat)
-                memory_hits += 1
-                keyword_matched = True
-                break
-        if keyword_matched:
             continue
         
         # 1. Check Vector Memory First (semantic similarity search)
