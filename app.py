@@ -466,9 +466,41 @@ if st.session_state.show_landing:
 # --- Helper Function for Historical Data ---
 HISTORICAL_FILE = "data/processed/historical_ledger.csv"
 
+def _ensure_date_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Make sure df has a valid Date column.
+
+    Strategy:
+      1. Try parsing the existing Date column.
+      2. For any rows where Date is NaT but Year/Month/Day are populated,
+         reconstruct Date from those columns (defensive: protects against
+         legacy rows that lost their Date during a previous save).
+      3. Persist Date back as a normalised ISO string later (in save_to_history).
+    """
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    else:
+        df['Date'] = pd.NaT
+
+    need_repair = df['Date'].isna() & df.get('Year', pd.Series(dtype=float)).notna() \
+                  & df.get('Month', pd.Series(dtype=float)).notna() \
+                  & df.get('Day', pd.Series(dtype=float)).notna()
+    if need_repair.any():
+        rebuilt = pd.to_datetime(
+            dict(
+                year=df.loc[need_repair, 'Year'].astype(int),
+                month=df.loc[need_repair, 'Month'].astype(int),
+                day=df.loc[need_repair, 'Day'].astype(int),
+            ),
+            errors='coerce',
+        )
+        df.loc[need_repair, 'Date'] = rebuilt
+    return df
+
 def load_historical_data():
     if os.path.exists(HISTORICAL_FILE):
         df = pd.read_csv(HISTORICAL_FILE)
+        # Defensive Date repair (handles legacy rows that lost their Date string)
+        df = _ensure_date_column(df)
         # Ensure Amount is numeric
         if 'Amount' in df.columns:
             df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
@@ -491,18 +523,24 @@ def load_historical_data():
 def save_to_history(new_df):
     history_df = load_historical_data()
     
+    # Normalise dates on the incoming frame so month-prefix filtering is reliable
+    new_df = _ensure_date_column(new_df.copy())
+
     if not history_df.empty:
         # Only keep data from different months, remove duplicates from the same month
         # This prevents re-uploading the same month from duplicating data
         if 'Month_Year' not in new_df.columns:
-            new_df['Month_Year'] = pd.to_datetime(new_df['Date'], errors='coerce').dt.to_period('M').astype(str)
+            new_df['Month_Year'] = new_df['Date'].dt.to_period('M').astype(str)
         
         # Get the month being uploaded
         new_month = new_df['Month_Year'].iloc[0] if not new_df.empty else None
         
         if new_month:
-            # Remove any existing data from this month
-            history_df = history_df[~(history_df['Date'].astype(str).str.startswith(new_month[:7]))]
+            # Remove any existing data from this month — compare via parsed Date,
+            # not raw string prefix (string prefix breaks when stored as
+            # "2026-04-08 00:00:00" or when Date is NaT).
+            hist_period = history_df['Date'].dt.to_period('M').astype(str)
+            history_df = history_df[hist_period != new_month]
         
         # Append new data
         combined_df = pd.concat([history_df, new_df]).drop_duplicates(subset=['Date', 'Description', 'Amount', 'Owner'])
@@ -511,7 +549,13 @@ def save_to_history(new_df):
     
     # Ensure Amount is numeric before saving
     combined_df['Amount'] = pd.to_numeric(combined_df['Amount'], errors='coerce')
-    
+
+    # Persist Date as a clean ISO string so CSV round-trips never lose info
+    combined_df['Date'] = pd.to_datetime(combined_df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+
+    # Drop rows that still have no Date (truly orphaned)
+    combined_df = combined_df.dropna(subset=['Date'])
+
     # Remove the Month_Year column before saving (it's calculated when needed)
     if 'Month_Year' in combined_df.columns:
         combined_df = combined_df.drop(columns=['Month_Year'])

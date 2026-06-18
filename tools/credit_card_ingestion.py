@@ -116,6 +116,78 @@ class IngestionAgent:
             engine='python'
         )
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Shared CC column-mapping helper
+    # ──────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _map_cc_columns(columns):
+        """
+        Map raw CC file column names → unified {Date, Description, Amount} mapping.
+
+        Enforces EXPLICIT precedence (critical to avoid silent data corruption):
+
+          Date:
+            1st choice: 'תאריך עסקה'  (transaction date — the real spend date)
+            2nd choice: any 'תאריך'   (excluding billing/charge date)
+            3rd choice: any 'תאריך'   (last resort, includes billing)
+            4th choice: 'date'
+
+          Amount:
+            1st choice: 'סכום החיוב' / 'סכום חיוב'  (actual monthly charge,
+                        respects installment splits — for a ₪1733 buy
+                        spread over 2 months this is ₪867)
+            2nd choice: 'סכום העסקה' / 'סכום עסקה'  (full transaction amount)
+            3rd choice: any 'סכום'    (last resort)
+            4th choice: 'amount'
+
+          Description:
+            1st choice: 'בית עסק' / 'שם בית עסק' (merchant)
+            2nd choice: 'שם' / 'עסק' / 'תיאור' / 'description'
+
+        Returns dict {source_col: target_name}. Will contain at most one
+        mapping per target. Skip empty/None columns.
+        """
+        cols = [str(c) for c in columns]
+
+        def _find(predicates):
+            """Return the first column matching any of the predicate lambdas."""
+            for pred in predicates:
+                for c in cols:
+                    if pred(c):
+                        return c
+            return None
+
+        date_col = _find([
+            lambda c: 'תאריך עסקה' in c,
+            lambda c: 'תאריך' in c and 'חיוב' not in c,
+            lambda c: 'תאריך' in c,           # last resort: includes billing date
+            lambda c: c.lower() == 'date' or 'date' in c.lower(),
+        ])
+
+        amount_col = _find([
+            lambda c: 'סכום החיוב' in c or 'סכום חיוב' in c,
+            lambda c: 'סכום העסקה' in c or 'סכום עסקה' in c,
+            lambda c: 'סכום' in c,
+            lambda c: c.lower() == 'amount' or 'amount' in c.lower(),
+        ])
+
+        desc_col = _find([
+            lambda c: 'בית עסק' in c or 'שם בית עסק' in c,
+            lambda c: 'תיאור' in c,
+            lambda c: c == 'שם' or c.startswith('שם '),
+            lambda c: c == 'עסק' or c.endswith(' עסק'),
+            lambda c: 'description' in c.lower(),
+        ])
+
+        mapping = {}
+        if date_col:
+            mapping[date_col] = 'Date'
+        if amount_col:
+            mapping[amount_col] = 'Amount'
+        if desc_col:
+            mapping[desc_col] = 'Description'
+        return mapping
+
     def parse_max(self, file_path, owner):
         # Try different skiprows to find the header
         for skip in [0, 3, 4, 5, 6]:
@@ -123,23 +195,10 @@ class IngestionAgent:
                 df = self._read_file(file_path, skiprows=skip)
                 if df is not None and len(df) > 0:
                     print(f"Max file with skiprows={skip}, columns: {df.columns.tolist()}")
-                    
-                    # Try to find the right columns (Hebrew names can vary)
-                    column_mapping = {}
-                    for col in df.columns:
-                        col_str = str(col)
-                        col_lower = col_str.lower()
-                        if any(x in col_str for x in ['תאריך', 'תא ר', 'date', 'Date']):
-                            if 'Date' not in column_mapping.values():
-                                column_mapping[col] = 'Date'
-                        elif any(x in col_str for x in ['בית עסק', 'שם', 'עסק', 'תיאור', 'description']):
-                            if 'Description' not in column_mapping.values():
-                                column_mapping[col] = 'Description'
-                        elif any(x in col_str for x in ['סכום', 'חיוב', 'amount']):
-                            if 'Amount' not in column_mapping.values():
-                                column_mapping[col] = 'Amount'
-                    
-                    if len(column_mapping) == 3 and all(x in column_mapping.values() for x in ['Date', 'Description', 'Amount']):
+
+                    column_mapping = self._map_cc_columns(df.columns)
+
+                    if all(x in column_mapping.values() for x in ['Date', 'Description', 'Amount']):
                         print(f"✓ Successfully mapped Max columns: {column_mapping}")
                         df = df.rename(columns=column_mapping)
                         df['Owner'], df['Source'] = owner, 'Max'
@@ -154,7 +213,9 @@ class IngestionAgent:
         # Detect if it's a PDF or CSV/Excel and adjust skiprows
         file_ext = os.path.splitext(file_path)[1].lower()
         
-        skip_options = [0] if file_ext == '.pdf' else [0, 5, 7, 10, 12, 15]
+        # Added skip=8 to support Discount-issued CAL cards (e.g. card 8428)
+        # whose header lives on line 9.
+        skip_options = [0] if file_ext == '.pdf' else [0, 5, 7, 8, 10, 12, 15]
         
         for skip in skip_options:
             try:
@@ -184,22 +245,11 @@ class IngestionAgent:
                         column_mapping = {'col_0': 'Date', 'col_1': 'Description', 'col_4': 'Amount'}
                         print(f"  → Using positional mapping (charge amount): {column_mapping}")
                     else:
-                        # Normal case: Try to find the right columns by name
-                        column_mapping = {}
-                        for col in df.columns:
-                            col_str = str(col)
-                            col_lower = col_str.lower()
-                            if any(x in col_str for x in ['תאריך', 'תא ר', 'date', 'Date']):
-                                if 'Date' not in column_mapping.values():
-                                    column_mapping[col] = 'Date'
-                            elif any(x in col_str for x in ['בית עסק', 'שם', 'עסק', 'תיאור', 'description']):
-                                if 'Description' not in column_mapping.values():
-                                    column_mapping[col] = 'Description'
-                            elif any(x in col_str for x in ['סכום', 'חיוב', 'amount']):
-                                if 'Amount' not in column_mapping.values():
-                                    column_mapping[col] = 'Amount'
-                    
-                    if len(column_mapping) == 3 and all(x in column_mapping.values() for x in ['Date', 'Description', 'Amount']):
+                        # Normal case: use shared mapper (transaction-date > billing-date,
+                        # charge-amount > full-amount)
+                        column_mapping = self._map_cc_columns(df.columns)
+
+                    if all(x in column_mapping.values() for x in ['Date', 'Description', 'Amount']):
                         print(f"✓ Successfully mapped Isracard columns: {column_mapping}")
                         df = df.rename(columns=column_mapping)
                         
@@ -371,34 +421,22 @@ class IngestionAgent:
 
     def parse_discount_credit_card(self, file_path, owner):
         """
-        Parse Discount credit card CSV files (e.g., card ending in 4288).
-        Header is typically at row 9 (skiprows=8).
+        Parse Discount credit card CSV files (e.g., cards ending in 4288 or 8428).
+        Header is typically at row 9 (skiprows=8) but may vary.
+
+        Uses the shared _map_cc_columns helper which ENFORCES:
+          - Date = 'תאריך עסקה' (transaction date, not billing date)
+          - Amount = 'סכום החיוב' (charge amount, respects installments)
         """
         for skip in [7, 8, 9, 10]:
             try:
                 df = self._read_file(file_path, skiprows=skip)
                 if df is not None and len(df) > 0:
                     print(f"Discount Credit Card with skiprows={skip}, columns: {df.columns.tolist()}")
-                    
-                    # Try to find the right columns
-                    column_mapping = {}
-                    for col in df.columns:
-                        col_str = str(col)
-                        col_lower = col_str.lower()
-                        if any(x in col_str for x in ['תאריך עסקה', 'תאריך', 'date']):
-                            if 'Date' not in column_mapping.values():
-                                column_mapping[col] = 'Date'
-                        elif any(x in col_str for x in ['בית עסק', 'עסק', 'שם בית עסק', 'description']):
-                            if 'Description' not in column_mapping.values():
-                                column_mapping[col] = 'Description'
-                        elif 'סכום החיוב' in col_str:
-                            # Prefer charge amount over full transaction amount (for installments)
-                            column_mapping[col] = 'Amount'
-                        elif any(x in col_str for x in ['סכום העסקה', 'סכום עסקה', 'סכום', 'amount']):
-                            if 'Amount' not in column_mapping.values():
-                                column_mapping[col] = 'Amount'
-                    
-                    if len(column_mapping) == 3 and all(x in column_mapping.values() for x in ['Date', 'Description', 'Amount']):
+
+                    column_mapping = self._map_cc_columns(df.columns)
+
+                    if all(x in column_mapping.values() for x in ['Date', 'Description', 'Amount']):
                         print(f"✓ Successfully mapped Discount Credit Card columns: {column_mapping}")
                         df = df.rename(columns=column_mapping)
                         df = df[['Date', 'Description', 'Amount']].dropna()
@@ -562,9 +600,11 @@ class IngestionAgent:
                     import traceback
                     print(f"  Full error: {traceback.format_exc()}")
             
-            # 3. Discount credit card detection (4288 for Tal)
-            elif "4288" in file_basename:
-                print(f"  → Identified as Discount Credit Card 4288 (Owner: Tal)")
+            # 3. Discount-issued credit card detection (CAL-issued Visa cards,
+            #    cards ending in 4288 or 8428 are known examples)
+            elif "4288" in file_basename or "8428" in file_basename:
+                card_id = "4288" if "4288" in file_basename else "8428"
+                print(f"  → Identified as Discount-issued Credit Card {card_id} (Owner: Tal)")
                 try:
                     _add_if_not_duplicate(self.parse_discount_credit_card(file, "Tal"), file)
                 except Exception as e:
@@ -578,14 +618,32 @@ class IngestionAgent:
                 except Exception as e:
                     print(f"  ✗ Failed to parse bank file: {e}")
             
-            # 5. Generic credit card detection (אשראי keyword)
+            # 5. Generic credit card detection (אשראי keyword) — try Isracard, then Discount as fallback
             elif "אשראי" in file_lower or "credit" in file_lower:
                 owner = "Tal" if "טל" in file_lower else "Reut" if "רעות" in file_lower else "Tal"
-                print(f"  → Identified as Credit card (Owner: {owner}, trying Isracard parser)")
+                print(f"  → Identified as generic Credit card (Owner: {owner})")
+                parsed_ok = False
+                # Try Isracard parser first
                 try:
-                    _add_if_not_duplicate(self.parse_isracard_csv(file, owner), file)
+                    parsed = self.parse_isracard_csv(file, owner)
+                    if parsed is not None and len(parsed) > 0:
+                        _add_if_not_duplicate(parsed, file)
+                        parsed_ok = True
+                        print(f"  ✓ Parsed as Isracard format")
                 except Exception as e:
-                    print(f"  ✗ Failed to parse credit card file: {e}")
+                    print(f"  ⚠️ Isracard parser failed: {e} — falling back to Discount CC parser…")
+                # Fallback to Discount-issued CC parser (CAL/Visa format)
+                if not parsed_ok:
+                    try:
+                        parsed = self.parse_discount_credit_card(file, owner)
+                        if parsed is not None and len(parsed) > 0:
+                            _add_if_not_duplicate(parsed, file)
+                            parsed_ok = True
+                            print(f"  ✓ Parsed as Discount-issued CC format")
+                    except Exception as e:
+                        print(f"  ✗ Discount CC parser also failed: {e}")
+                if not parsed_ok:
+                    print(f"  ✗ Could not parse credit card file with any known format")
             
             # 6. PDF warning
             elif file_lower.endswith('.pdf'):
