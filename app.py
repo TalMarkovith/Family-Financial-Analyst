@@ -456,7 +456,7 @@ if st.session_state.show_landing:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    if st.button(t('start_analysis', L), type="primary", use_container_width=True):
+    if st.button(t('start_analysis', L), type="primary", width="stretch"):
         st.session_state.show_landing = False
         st.session_state.selected_month_from_landing = selected_month_landing
         st.rerun()
@@ -950,7 +950,7 @@ if 'dup_txns' in st.session_state and st.session_state['dup_txns']:
                 label_visibility="collapsed"
             )
     
-    if st.button(t('dup_txn_confirm', L), type="primary", use_container_width=True):
+    if st.button(t('dup_txn_confirm', L), type="primary", width="stretch"):
         # Collect indices to remove
         indices_to_remove = []
         remove_label = t('dup_txn_remove', L)
@@ -1096,7 +1096,7 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
     # Action buttons
     col_approve, col_skip = st.columns(2)
     with col_approve:
-        if st.button(t('btn_approve', L), type="primary", use_container_width=True):
+        if st.button(t('btn_approve', L), type="primary", width="stretch"):
             approved = []
             for item in review_data:
                 final_cat = st.session_state.get(f"review_cat_{item['idx']}", item['ai_category'])
@@ -1135,7 +1135,7 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
             st.rerun()
     
     with col_skip:
-        if st.button(t('btn_skip', L), use_container_width=True):
+        if st.button(t('btn_skip', L), width="stretch"):
             st.session_state['pending_reviews'] = []
             st.rerun()
 
@@ -1173,7 +1173,7 @@ if 'current_df' in st.session_state:
             ), unsafe_allow_html=True)
             
             analyze_btn_label = "🚀 הפעל ניתוח AI" if L == 'he' else "🚀 Run AI Analysis"
-            if st.button(analyze_btn_label, type="primary", use_container_width=True, key="run_analysis_main"):
+            if st.button(analyze_btn_label, type="primary", width="stretch", key="run_analysis_main"):
                 with st.spinner("מייצר ניתוח חודשי..." if L == 'he' else "Generating monthly analysis..."):
                     df = st.session_state['current_df']
                     analyst = FinancialAnalystAgent()
@@ -1247,7 +1247,7 @@ if 'current_df' in st.session_state:
                 plot_bgcolor='rgba(0,0,0,0)',
                 margin=dict(l=0, r=0, t=0, b=0)
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width="stretch")
             st.markdown('</div>', unsafe_allow_html=True)
             
         with col2:
@@ -1275,7 +1275,7 @@ if 'current_df' in st.session_state:
                 margin=dict(l=0, r=0, t=0, b=0)
             )
             fig_bar.update_traces(texttemplate='₪%{y:,.0f}', textposition='outside', textfont=dict(color='white'))
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width="stretch")
             st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
@@ -1373,7 +1373,7 @@ if 'current_df' in st.session_state:
                 hovermode='x unified',
                 margin=dict(l=0, r=0, t=0, b=0)
             )
-            st.plotly_chart(fig_income_expense, use_container_width=True)
+            st.plotly_chart(fig_income_expense, width="stretch")
             st.markdown('</div>', unsafe_allow_html=True)
             
             st.markdown("---")
@@ -1423,7 +1423,7 @@ if 'current_df' in st.session_state:
                     hovermode='x unified',
                     margin=dict(l=0, r=0, t=0, b=0)
                 )
-                st.plotly_chart(fig_timeline, use_container_width=True)
+                st.plotly_chart(fig_timeline, width="stretch")
                 st.markdown('</div>', unsafe_allow_html=True)
 
     with tab3:
@@ -1554,7 +1554,7 @@ if 'current_df' in st.session_state:
         col_save, col_analyze = st.columns(2)
         
         with col_save:
-            if st.button(t('raw_save_changes', L), type="primary", use_container_width=True):
+            if st.button(t('raw_save_changes', L), type="primary", width="stretch"):
                 changes = 0
                 cat_changes = 0
                 excluded_changes = 0
@@ -1644,7 +1644,7 @@ if 'current_df' in st.session_state:
         
         with col_analyze:
             analyze_label = "🔄 עדכן ניתוח" if L == 'he' else "🔄 Update Analysis"
-            if st.button(analyze_label, type="secondary", use_container_width=True):
+            if st.button(analyze_label, type="secondary", width="stretch"):
                 with st.spinner("מייצר ניתוח חדש..." if L == 'he' else "Generating new analysis..."):
                     df = st.session_state['current_df']
                     analyst = FinancialAnalystAgent()
