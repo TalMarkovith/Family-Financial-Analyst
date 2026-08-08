@@ -66,22 +66,37 @@ class IngestionAgent:
         except Exception as e:
             raise ValueError(f"Error reading PDF file {file_path}: {e}")
     
-    def _read_file(self, file_path, skiprows=0):
+    def _excel_sheet_names(self, file_path):
+        """Return the list of sheet names in a workbook (['default'] on failure)."""
+        try:
+            return pd.ExcelFile(file_path).sheet_names
+        except Exception as e:
+            print(f"  ⚠️ Could not enumerate sheets for {os.path.basename(file_path)}: {e}")
+            return [0]
+
+    def _read_file(self, file_path, skiprows=0, sheet=0):
         """
         Read CSV, Excel, or PDF file with proper encoding handling.
+
+        `sheet` selects which worksheet to read for Excel files (index or name);
+        it is ignored for CSV/PDF. Multi-sheet workbooks are handled by the
+        caller, which invokes the parser once per sheet.
         """
         file_ext = os.path.splitext(file_path)[1].lower()
-        
+
         # Handle PDF files
         if file_ext == '.pdf':
             return self._read_pdf(file_path)
-        
+
         # Handle Excel files
         if file_ext in ['.xlsx', '.xls']:
             try:
-                # Read Excel WITHOUT date parsing, keep everything as-is
-                df = pd.read_excel(file_path, skiprows=skiprows, date_format=None, parse_dates=False)
-                print(f"Successfully read Excel file: {os.path.basename(file_path)}")
+                # Read Excel WITHOUT date parsing, keep everything as-is.
+                # sheet_name is EXPLICIT — omitting it defaults to the first
+                # sheet only and silently drops every other sheet's transactions.
+                df = pd.read_excel(file_path, sheet_name=sheet, skiprows=skiprows,
+                                   date_format=None, parse_dates=False)
+                print(f"Successfully read Excel file: {os.path.basename(file_path)} (sheet {sheet})")
                 return df
             except Exception as e:
                 raise ValueError(f"Error reading Excel file {file_path}: {e}")
@@ -188,11 +203,11 @@ class IngestionAgent:
             mapping[desc_col] = 'Description'
         return mapping
 
-    def parse_max(self, file_path, owner):
+    def parse_max(self, file_path, owner, sheet=0):
         # Try different skiprows to find the header
         for skip in [0, 3, 4, 5, 6]:
             try:
-                df = self._read_file(file_path, skiprows=skip)
+                df = self._read_file(file_path, skiprows=skip, sheet=sheet)
                 if df is not None and len(df) > 0:
                     print(f"Max file with skiprows={skip}, columns: {df.columns.tolist()}")
 
@@ -209,17 +224,17 @@ class IngestionAgent:
         
         raise ValueError(f"Could not parse Max file. Could not find required columns.")
 
-    def parse_isracard_csv(self, file_path, owner):
+    def parse_isracard_csv(self, file_path, owner, sheet=0):
         # Detect if it's a PDF or CSV/Excel and adjust skiprows
         file_ext = os.path.splitext(file_path)[1].lower()
-        
+
         # Added skip=8 to support Discount-issued CAL cards (e.g. card 8428)
         # whose header lives on line 9.
         skip_options = [0] if file_ext == '.pdf' else [0, 5, 7, 8, 10, 12, 15]
-        
+
         for skip in skip_options:
             try:
-                df = self._read_file(file_path, skiprows=skip)
+                df = self._read_file(file_path, skiprows=skip, sheet=sheet)
                 if df is not None and len(df) > 0:
                     print(f"Isracard file with skiprows={skip}, columns: {df.columns.tolist()}")
                     
@@ -230,7 +245,7 @@ class IngestionAgent:
                         print(f"  → Detected headerless Isracard file! Re-reading with header=None...")
                         # Re-read the file with header=None so ALL rows are data (including the first)
                         if file_ext in ['.xlsx', '.xls']:
-                            df = pd.read_excel(file_path, skiprows=skip, header=None, dtype=str)
+                            df = pd.read_excel(file_path, sheet_name=sheet, skiprows=skip, header=None, dtype=str)
                         else:
                             df = pd.read_csv(file_path, skiprows=skip, header=None, dtype=str,
                                            encoding='utf-8', on_bad_lines='skip', engine='python')
@@ -281,11 +296,11 @@ class IngestionAgent:
         
         raise ValueError(f"Could not parse Isracard file. Could not find required columns.")
 
-    def parse_bank_discount(self, file_path):
+    def parse_bank_discount(self, file_path, sheet=0):
         # Try different skiprows to find the header
         for skip in [0, 3, 5, 7, 8, 10]:
             try:
-                df = self._read_file(file_path, skiprows=skip)
+                df = self._read_file(file_path, skiprows=skip, sheet=sheet)
                 if df is not None and len(df) > 0:
                     print(f"Bank file with skiprows={skip}, columns: {df.columns.tolist()}")
                     print(f"First row sample: {df.head(1).to_dict('records') if len(df) > 0 else 'empty'}")
@@ -298,7 +313,7 @@ class IngestionAgent:
                         if 'datetime' in first_col_type.lower():
                             print("  → Detected headerless bank file with datetime columns, assigning column names...")
                             # The columns ARE the first row of data, reset them
-                            new_df = pd.read_excel(file_path, skiprows=skip, header=None, dtype=str)
+                            new_df = pd.read_excel(file_path, sheet_name=sheet, skiprows=skip, header=None, dtype=str)
                             new_df.columns = [f'col_{i}' for i in range(len(new_df.columns))]
                             df = new_df
                         
@@ -419,7 +434,7 @@ class IngestionAgent:
         # If we get here, couldn't parse the file
         raise ValueError(f"Could not parse Bank file. Tried multiple skiprows values but couldn't find Date, Description, and Amount columns.")
 
-    def parse_discount_credit_card(self, file_path, owner):
+    def parse_discount_credit_card(self, file_path, owner, sheet=0):
         """
         Parse Discount credit card CSV files (e.g., cards ending in 4288 or 8428).
         Header is typically at row 9 (skiprows=8) but may vary.
@@ -430,7 +445,7 @@ class IngestionAgent:
         """
         for skip in [7, 8, 9, 10]:
             try:
-                df = self._read_file(file_path, skiprows=skip)
+                df = self._read_file(file_path, skiprows=skip, sheet=sheet)
                 if df is not None and len(df) > 0:
                     print(f"Discount Credit Card with skiprows={skip}, columns: {df.columns.tolist()}")
 
@@ -542,13 +557,124 @@ class IngestionAgent:
         
         return duplicates
 
+    def _parse_file_sheet(self, file, sheet=0):
+        """
+        Identify the source type from the filename and parse a SINGLE sheet.
+
+        Returns a unified DataFrame (Date/Description/Amount/Owner/Source) or
+        None if this sheet could not be parsed. Never raises — a sheet that
+        fails (e.g. a cover/summary sheet) is skipped so the rest of the
+        workbook still gets ingested.
+        """
+        file_lower = file.lower()
+        file_basename = os.path.basename(file_lower)
+
+        # 1. Max credit card detection (רעות מקס)
+        if "max" in file_lower or "מקס" in file_lower:
+            owner = "Reut" if "רעות" in file_lower else "Tal"
+            print(f"  → Identified as Max credit card (Owner: {owner})")
+            try:
+                return self.parse_max(file, owner, sheet=sheet)
+            except Exception as e:
+                print(f"  ✗ Failed to parse Max file: {e}")
+                return None
+
+        # 2. Isracard detection (3172 for Tal)
+        elif "isracard" in file_lower or "ישראכרט" in file_lower or "ישראכארט" in file_lower or "3172" in file_basename:
+            owner = "Tal" if "3172" in file_basename or "טל" in file_lower else "Reut"
+            print(f"  → Identified as Isracard (Owner: {owner})")
+            try:
+                parsed_data = self.parse_isracard_csv(file, owner, sheet=sheet)
+                if parsed_data is not None and len(parsed_data) > 0:
+                    print(f"  ✓ Successfully added {len(parsed_data)} Isracard transactions")
+                    return parsed_data
+                print(f"  ⚠️ Isracard parser returned empty data")
+                return None
+            except Exception as e:
+                print(f"  ✗ Failed to parse Isracard file: {e}")
+                import traceback
+                print(f"  Full error: {traceback.format_exc()}")
+                return None
+
+        # 3. Discount-issued credit card detection (CAL-issued Visa cards,
+        #    cards ending in 4288 or 8428 are known examples)
+        elif "4288" in file_basename or "8428" in file_basename:
+            card_id = "4288" if "4288" in file_basename else "8428"
+            print(f"  → Identified as Discount-issued Credit Card {card_id} (Owner: Tal)")
+            try:
+                return self.parse_discount_credit_card(file, "Tal", sheet=sheet)
+            except Exception as e:
+                print(f"  ✗ Failed to parse Discount Credit Card: {e}")
+                return None
+
+        # 4. Bank checking account (עובר ושב)
+        elif "דיסקונט" in file_lower or "discount" in file_lower or "עובר ושב" in file_lower or "עו\"ש" in file_lower or "bank" in file_lower:
+            print("  → Identified as Discount bank/checking account")
+            try:
+                return self.parse_bank_discount(file, sheet=sheet)
+            except Exception as e:
+                print(f"  ✗ Failed to parse bank file: {e}")
+                return None
+
+        # 5. Generic credit card detection (אשראי keyword) — try Isracard, then Discount as fallback
+        elif "אשראי" in file_lower or "credit" in file_lower:
+            owner = "Tal" if "טל" in file_lower else "Reut" if "רעות" in file_lower else "Tal"
+            print(f"  → Identified as generic Credit card (Owner: {owner})")
+            # Try Isracard parser first
+            try:
+                parsed = self.parse_isracard_csv(file, owner, sheet=sheet)
+                if parsed is not None and len(parsed) > 0:
+                    print(f"  ✓ Parsed as Isracard format")
+                    return parsed
+            except Exception as e:
+                print(f"  ⚠️ Isracard parser failed: {e} — falling back to Discount CC parser…")
+            # Fallback to Discount-issued CC parser (CAL/Visa format)
+            try:
+                parsed = self.parse_discount_credit_card(file, owner, sheet=sheet)
+                if parsed is not None and len(parsed) > 0:
+                    print(f"  ✓ Parsed as Discount-issued CC format")
+                    return parsed
+            except Exception as e:
+                print(f"  ✗ Discount CC parser also failed: {e}")
+            print(f"  ✗ Could not parse credit card file with any known format")
+            return None
+
+        # 6. PDF warning
+        elif file_lower.endswith('.pdf'):
+            print(f"  ⚠️ PDF file detected. Attempting extraction...")
+            print(f"  💡 Tip: For better results, export as CSV/Excel from your bank's website")
+            try:
+                return self.parse_isracard_csv(file, "Tal", sheet=sheet)
+            except Exception as e:
+                print(f"  ✗ PDF parsing failed: {e}")
+                print(f"  → Skipping this file. Please convert to Excel/CSV format.")
+                return None
+
+        # 7. Unknown file type - try auto-detection
+        else:
+            print(f"  ⚠️ Unknown file type: {file}")
+            print(f"     Attempting auto-detection based on file structure...")
+            try:
+                df_test = self._read_file(file, skiprows=0, sheet=sheet)
+                if df_test is not None and len(df_test) > 0:
+                    # Try Isracard parser (most flexible)
+                    parsed = self.parse_isracard_csv(file, "Tal", sheet=sheet)
+                    if parsed is not None and len(parsed) > 0:
+                        print(f"  ✓ Successfully parsed with Isracard parser")
+                    return parsed
+                print(f"  ✗ Failed to parse file")
+                return None
+            except Exception as e:
+                print(f"  ✗ Auto-detection failed: {e}")
+                return None
+
     def run_monthly_ingestion(self, files_list):
         """
         Orchestrator method to process multiple files and return unified DataFrame.
-        
+
         Args:
             files_list: List of file paths to process
-            
+
         Returns:
             Unified pandas DataFrame with all transactions
         """
@@ -556,121 +682,51 @@ class IngestionAgent:
         self.file_fingerprints = {}
         self.duplicate_files = []
         
-        def _add_if_not_duplicate(parsed_df, filepath):
-            """Check fingerprint before adding parsed data."""
+        def _add_if_not_duplicate(parsed_df, label):
+            """Check fingerprint before adding parsed data.
+
+            `label` uniquely identifies the parsed unit (file, or file#sheet for
+            multi-sheet workbooks) so each sheet's fingerprint is tracked
+            independently while still catching genuinely identical content.
+            """
             if parsed_df is None or parsed_df.empty:
                 return
-            fname = os.path.basename(filepath)
-            is_dup, original = self._check_duplicate_file(parsed_df, fname)
+            is_dup, original = self._check_duplicate_file(parsed_df, label)
             if is_dup:
-                print(f"  🚫 DUPLICATE FILE: '{fname}' is identical to '{original}' — skipping!")
-                self.duplicate_files.append((fname, original))
+                print(f"  🚫 DUPLICATE: '{label}' is identical to '{original}' — skipping!")
+                self.duplicate_files.append((label, original))
             else:
                 all_data.append(parsed_df)
-        
+
         for file in files_list:
-            file_lower = file.lower()
-            file_basename = os.path.basename(file_lower)
             print(f"Processing file: {file}")
-            
-            # Enhanced file type detection with Hebrew support and card numbers
-            
-            # 1. Max credit card detection (רעות מקס)
-            if "max" in file_lower or "מקס" in file_lower:
-                owner = "Reut" if "רעות" in file_lower else "Tal"
-                print(f"  → Identified as Max credit card (Owner: {owner})")
-                try:
-                    _add_if_not_duplicate(self.parse_max(file, owner), file)
-                except Exception as e:
-                    print(f"  ✗ Failed to parse Max file: {e}")
-            
-            # 2. Isracard detection (3172 for Tal)
-            elif "isracard" in file_lower or "ישראכרט" in file_lower or "ישראכארט" in file_lower or "3172" in file_basename:
-                owner = "Tal" if "3172" in file_basename or "טל" in file_lower else "Reut"
-                print(f"  → Identified as Isracard (Owner: {owner})")
-                try:
-                    parsed_data = self.parse_isracard_csv(file, owner)
-                    if parsed_data is not None and len(parsed_data) > 0:
-                        _add_if_not_duplicate(parsed_data, file)
-                        print(f"  ✓ Successfully added {len(parsed_data)} Isracard transactions")
-                    else:
-                        print(f"  ⚠️ Isracard parser returned empty data")
-                except Exception as e:
-                    print(f"  ✗ Failed to parse Isracard file: {e}")
-                    import traceback
-                    print(f"  Full error: {traceback.format_exc()}")
-            
-            # 3. Discount-issued credit card detection (CAL-issued Visa cards,
-            #    cards ending in 4288 or 8428 are known examples)
-            elif "4288" in file_basename or "8428" in file_basename:
-                card_id = "4288" if "4288" in file_basename else "8428"
-                print(f"  → Identified as Discount-issued Credit Card {card_id} (Owner: Tal)")
-                try:
-                    _add_if_not_duplicate(self.parse_discount_credit_card(file, "Tal"), file)
-                except Exception as e:
-                    print(f"  ✗ Failed to parse Discount Credit Card: {e}")
-            
-            # 4. Bank checking account (עובר ושב)
-            elif "דיסקונט" in file_lower or "discount" in file_lower or "עובר ושב" in file_lower or "עו\"ש" in file_lower or "bank" in file_lower:
-                print("  → Identified as Discount bank/checking account")
-                try:
-                    _add_if_not_duplicate(self.parse_bank_discount(file), file)
-                except Exception as e:
-                    print(f"  ✗ Failed to parse bank file: {e}")
-            
-            # 5. Generic credit card detection (אשראי keyword) — try Isracard, then Discount as fallback
-            elif "אשראי" in file_lower or "credit" in file_lower:
-                owner = "Tal" if "טל" in file_lower else "Reut" if "רעות" in file_lower else "Tal"
-                print(f"  → Identified as generic Credit card (Owner: {owner})")
-                parsed_ok = False
-                # Try Isracard parser first
-                try:
-                    parsed = self.parse_isracard_csv(file, owner)
-                    if parsed is not None and len(parsed) > 0:
-                        _add_if_not_duplicate(parsed, file)
-                        parsed_ok = True
-                        print(f"  ✓ Parsed as Isracard format")
-                except Exception as e:
-                    print(f"  ⚠️ Isracard parser failed: {e} — falling back to Discount CC parser…")
-                # Fallback to Discount-issued CC parser (CAL/Visa format)
-                if not parsed_ok:
-                    try:
-                        parsed = self.parse_discount_credit_card(file, owner)
-                        if parsed is not None and len(parsed) > 0:
-                            _add_if_not_duplicate(parsed, file)
-                            parsed_ok = True
-                            print(f"  ✓ Parsed as Discount-issued CC format")
-                    except Exception as e:
-                        print(f"  ✗ Discount CC parser also failed: {e}")
-                if not parsed_ok:
-                    print(f"  ✗ Could not parse credit card file with any known format")
-            
-            # 6. PDF warning
-            elif file_lower.endswith('.pdf'):
-                print(f"  ⚠️ PDF file detected. Attempting extraction...")
-                print(f"  💡 Tip: For better results, export as CSV/Excel from your bank's website")
-                try:
-                    # Try to parse PDF anyway
-                    _add_if_not_duplicate(self.parse_isracard_csv(file, "Tal"), file)
-                except Exception as e:
-                    print(f"  ✗ PDF parsing failed: {e}")
-                    print(f"  → Skipping this file. Please convert to Excel/CSV format.")
-            
-            # 7. Unknown file type - try auto-detection
+
+            # Determine which sheets to read. For Excel workbooks we read EVERY
+            # sheet (parsing each independently); CSV/PDF have a single unit.
+            ext = os.path.splitext(file)[1].lower()
+            if ext in ('.xlsx', '.xls'):
+                sheets = self._excel_sheet_names(file)
             else:
-                print(f"  ⚠️ Unknown file type: {file}")
-                print(f"     Attempting auto-detection based on file structure...")
-                try:
-                    df_test = self._read_file(file, skiprows=0)
-                    if df_test is not None and len(df_test) > 0:
-                        # Try Isracard parser (most flexible)
-                        _add_if_not_duplicate(self.parse_isracard_csv(file, "Tal"), file)
-                        print(f"  ✓ Successfully parsed with Isracard parser")
-                    else:
-                        print(f"  ✗ Failed to parse file")
-                except Exception as e:
-                    print(f"  ✗ Auto-detection failed: {e}")
-        
+                sheets = [0]
+
+            multi = len(sheets) > 1
+            if multi:
+                print(f"  📑 Multi-sheet workbook: {len(sheets)} sheets → {sheets}")
+
+            for sheet in sheets:
+                if multi:
+                    print(f"  ── Parsing sheet '{sheet}' ──")
+                parsed = self._parse_file_sheet(file, sheet=sheet)
+                # Label uniquely per sheet so fingerprints don't collide.
+                label = os.path.basename(file) if not multi else f"{os.path.basename(file)}#{sheet}"
+                if parsed is None or parsed.empty:
+                    if multi:
+                        print(f"    ⏭️  Sheet '{sheet}': no transactions parsed — skipped")
+                    continue
+                if multi:
+                    print(f"    ✓ Sheet '{sheet}': {len(parsed)} transactions")
+                _add_if_not_duplicate(parsed, label)
+
         if not all_data:
             return pd.DataFrame(columns=self.unified_columns)
         
