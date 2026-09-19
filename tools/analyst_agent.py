@@ -122,6 +122,35 @@ class FinancialAnalystAgent:
         month_context_he = f" לחודש {month_year}" if month_year else ""
         month_context_en = f" for {month_year}" if month_year else ""
 
+        # Investment messaging is decided in CODE, not by an LLM conditional.
+        # LLMs cannot reliably evaluate "if investments > savings" and will
+        # otherwise parrot "you invested a massive ₪0.00" when nothing was
+        # invested. So: only surface investments when there actually were any.
+        if investments > 0:
+            invest_line_he = f"\n            - 💎 **הון שהופקד להשקעות החודש:** ₪{investments:,.2f}"
+            invest_guidance_he = (
+                f'2. החודש הופקדו ₪{investments:,.2f} להשקעות — ציין זאת כניהול הון חיובי. '
+                f'אל תמציא מהיכן הגיע הכסף.\n'
+                f'            3. לעולם אל תציג את ההשקעות כהפסד או כגירעון בעו"ש.'
+            )
+            invest_line_en = f"\n            - 💎 **Capital invested this month:** ₪{investments:,.2f}"
+            invest_guidance_en = (
+                f'2. ₪{investments:,.2f} was invested this month — note it as positive capital '
+                f'management. Do not invent where the money came from.\n'
+                f'            3. Never present investments as a loss or account deficit.'
+            )
+        else:
+            invest_line_he = ""
+            invest_guidance_he = (
+                '2. החודש לא בוצעו השקעות. אל תזכיר השקעות כלל, אל תברך על השקעה, '
+                'ובשום אופן אל תכתוב שהושקע סכום כלשהו (גם לא ₪0).'
+            )
+            invest_line_en = ""
+            invest_guidance_en = (
+                '2. No investments were made this month. Do NOT mention investments at all, '
+                'do not congratulate on investing, and never state that any amount was invested (not even ₪0).'
+            )
+
         # 5. Build prompt based on language
         if lang == 'he':
             prompt = f"""
@@ -131,16 +160,14 @@ class FinancialAnalystAgent:
             📊 **תמונת המצב הפיננסית האמיתית{month_context_he}:**
             - 💰 **הכנסות החודש:** ₪{income:,.2f}
             - 💸 **הוצאות מחיה שוטפות:** ₪{expenses:,.2f}
-            - 🎯 **חיסכון חודשי נטו (הכנסות פחות הוצאות):** ₪{net_savings:,.2f} ({savings_rate:.1f}% שיעור חיסכון!)
-            - 💎 **הון שהופקד להשקעות:** ₪{investments:,.2f}
+            - 🎯 **חיסכון חודשי נטו (הכנסות פחות הוצאות):** ₪{net_savings:,.2f} ({savings_rate:.1f}% שיעור חיסכון!){invest_line_he}
 
             {expense_details}
             {comparison_text}
 
             **הנחיות קריטיות לכתיבת הניתוח:**
             1. חגוג את החיסכון החודשי! (₪{net_savings:,.2f}). זה מראה שהם חיים הרבה מתחת לרמת ההכנסה שלהם.
-            2. אם ההשקעות (₪{investments:,.2f}) גדולות יותר מהחיסכון הנטו, ציין בהתלהבות: "החודש השקעתם סכום עצום של ₪{investments:,.2f}, שמורכב מהחיסכון של החודש בתוספת כספים מחודשים קודמים. זהו ניהול הון חכם מאוד!"
-            3. לעולם אל תציג את ההשקעות כהפסד או כגירעון בעו"ש.
+            {invest_guidance_he}
             4. הצג 5-8 סעיפי הוצאות בולטים.
             5. כתוב הכל בעברית מימין לשמאל (RTL) בפורמט Markdown נקי ונעים עם אימוג'ים.
             6. אל תמציא מספרים. השתמש רק בנתונים המדויקים שסיפקתי למעלה.
@@ -153,16 +180,14 @@ class FinancialAnalystAgent:
             📊 **Financial Snapshot{month_context_en}:**
             - 💰 **Monthly Income:** ₪{income:,.2f}
             - 💸 **Living Expenses:** ₪{expenses:,.2f}
-            - 🎯 **Net Monthly Savings (Income minus Expenses):** ₪{net_savings:,.2f} ({savings_rate:.1f}% savings rate!)
-            - 💎 **Invested Capital:** ₪{investments:,.2f}
+            - 🎯 **Net Monthly Savings (Income minus Expenses):** ₪{net_savings:,.2f} ({savings_rate:.1f}% savings rate!){invest_line_en}
 
             {expense_details}
             {comparison_text}
 
             **Critical writing guidelines:**
             1. Celebrate the monthly savings! (₪{net_savings:,.2f}). This shows they live well below their income level.
-            2. If investments (₪{investments:,.2f}) exceed net savings, note enthusiastically: "This month you invested a massive ₪{investments:,.2f}, combining this month's savings with funds from previous months. This is very smart capital management!"
-            3. Never present investments as a loss or account deficit.
+            {invest_guidance_en}
             4. Highlight 5-8 notable expense categories.
             5. Write in clean Markdown format with emojis.
             6. Do NOT invent numbers. Use ONLY the exact data provided above.

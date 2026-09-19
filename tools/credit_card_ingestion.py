@@ -8,6 +8,7 @@ class IngestionAgent:
         self.unified_columns = ['Date', 'Description', 'Amount', 'Owner', 'Source']
         self.file_fingerprints = {}   # filename → hash (for duplicate file detection)
         self.duplicate_files = []     # list of (duplicate_name, original_name)
+        self.empty_files = []         # files that parsed to 0 rows (silent-drop guard)
     
     def _read_pdf(self, file_path):
         """
@@ -442,8 +443,13 @@ class IngestionAgent:
         Uses the shared _map_cc_columns helper which ENFORCES:
           - Date = 'תאריך עסקה' (transaction date, not billing date)
           - Amount = 'סכום החיוב' (charge amount, respects installments)
+
+        skiprows=3 supports the NEWER CAL/Discount export format (e.g. cards
+        8112 "MAX Back", 7043 TAU) whose header sits on row 4 (3 title rows
+        above it). Without it these files parse to zero rows and are dropped
+        silently — an entire card's spending would go uncounted.
         """
-        for skip in [7, 8, 9, 10]:
+        for skip in [3, 7, 8, 9, 10]:
             try:
                 df = self._read_file(file_path, skiprows=skip, sheet=sheet)
                 if df is not None and len(df) > 0:
@@ -681,6 +687,7 @@ class IngestionAgent:
         all_data = []
         self.file_fingerprints = {}
         self.duplicate_files = []
+        self.empty_files = []
         
         def _add_if_not_duplicate(parsed_df, label):
             """Check fingerprint before adding parsed data.
@@ -713,6 +720,7 @@ class IngestionAgent:
             if multi:
                 print(f"  📑 Multi-sheet workbook: {len(sheets)} sheets → {sheets}")
 
+            file_rows = 0
             for sheet in sheets:
                 if multi:
                     print(f"  ── Parsing sheet '{sheet}' ──")
@@ -725,7 +733,18 @@ class IngestionAgent:
                     continue
                 if multi:
                     print(f"    ✓ Sheet '{sheet}': {len(parsed)} transactions")
+                file_rows += len(parsed)
                 _add_if_not_duplicate(parsed, label)
+
+            # ── Silent-drop guard ──
+            # A file that yields ZERO transactions almost always means an
+            # unrecognized format (e.g. a new CC export layout), NOT an empty
+            # statement. Record it so the caller can WARN the user instead of
+            # silently losing an entire card's spending.
+            if file_rows == 0:
+                self.empty_files.append(os.path.basename(file))
+                print(f"  ⚠️⚠️  WARNING: '{os.path.basename(file)}' produced 0 transactions — "
+                      f"unrecognized format? Its spending is NOT counted.")
 
         if not all_data:
             return pd.DataFrame(columns=self.unified_columns)
