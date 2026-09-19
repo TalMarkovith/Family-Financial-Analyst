@@ -754,7 +754,18 @@ if run_button and uploaded_files:
             if ingestion_agent.duplicate_files:
                 for dup_name, orig_name in ingestion_agent.duplicate_files:
                     st.warning(t('dup_file_desc', L, filename=dup_name, original=orig_name))
-            
+
+            # ── Safety: Files that parsed to ZERO rows (unrecognized format) ──
+            # Without this, an entire card's spending can vanish silently.
+            if getattr(ingestion_agent, 'empty_files', None):
+                for empty_name in ingestion_agent.empty_files:
+                    st.error(
+                        ("⚠️ הקובץ '{f}' לא זוהה — 0 עסקאות נקראו ממנו! ההוצאות שלו אינן נספרות. "
+                         "בדקו את מבנה הקובץ.").format(f=empty_name) if L == 'he'
+                        else ("⚠️ File '{f}' was not recognized — 0 transactions parsed! "
+                              "Its spending is NOT counted. Check the file format.").format(f=empty_name)
+                    )
+
             # Show date info (dates are already parsed by IngestionAgent)
             st.info(t('loaded_total', L, count=len(raw_unified_df)))
             st.info(t('date_range', L, min_date=str(raw_unified_df['Date'].min())[:10], max_date=str(raw_unified_df['Date'].max())[:10]))
