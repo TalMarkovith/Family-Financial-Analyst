@@ -119,10 +119,14 @@ def classify_dataframe(df):
             continue
         
         # 1. Check Vector Memory First (semantic similarity search)
-        # Threshold 0.89 = calibrated sweet spot (tested with real data):
-        #   Good matches:  שופרסל שלי נורדאו ↔ שופרסל = 0.9044, הו"ק rent = 0.8892
-        #   False positives: גל שיטרית ↔ שטראוס = 0.8719, דור פארק ↔ סופר פארם = 0.8796
-        memory_result = memory.find_similar_merchant(merchant, threshold=0.89)
+        # Threshold raised 0.89 → 0.94 after the Sept 2026 run, where shared
+        # words (company suffix, city name) produced confident wrong matches:
+        #   פז חברת נפט ↔ יעד חברה לפיתו = 0.9076   (fuel → shopping)
+        #   מבדק מכוני בדיקה פתח תקוה ↔ ג'ט לק פתח תקווה = 0.8964 (car test → cafe)
+        #   סטקיית הבוקרים ↔ מכבי יזמות וניהול בע = 0.9306 (restaurant → insurance)
+        # Below 0.94 the LLM classifies instead (costs one call, but reads meaning).
+        # Exact repeats score ~1.0 and still hit memory.
+        memory_result = memory.find_similar_merchant(merchant, threshold=0.94)
         
         if memory_result:
             # Found a similar merchant in memory!

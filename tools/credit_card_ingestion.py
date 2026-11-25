@@ -351,7 +351,7 @@ class IngestionAgent:
                                 
                                 # Filter bank to only keep bank-exclusive transactions
                                 exclude_patterns = [
-                                    'מקס איט פי', 'ישראכרט חיוב', 'חיוב לכרטיס', 'כרטיס ממקס', 'כרטיס ויזה',
+                                    'מקס איט פי', 'ישראכרט', 'חיוב לכרטיס', 'כרטיס ממקס', 'כרטיס ויזה',
                                     'בנק פועלים משכורת', 'משכורת', 'העברה מ', 'העברה ל', 'תשלום שוברי'
                                 ]
                                 exclude_mask = df['Description'].astype(str).apply(lambda x: any(p in x for p in exclude_patterns))
@@ -399,7 +399,7 @@ class IngestionAgent:
                         exclude_patterns = [
                             # CC aggregate payments (already itemized in credit card files)
                             'מקס איט פי',          # Max credit card payment
-                            'ישראכרט חיוב',         # Isracard payment
+                            'ישראכרט',              # Isracard settlement: 'ישראכרט חיוב' or bare 'ישראכרט' (debit OR credit)
                             'חיוב לכרטיס',          # Generic CC payment ("חיוב לכרטיס ויזה 8428")
                             'כרטיס ממקס',           # Max card payment
                             'כרטיס ויזה',           # Visa card payment

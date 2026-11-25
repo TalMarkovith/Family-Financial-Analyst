@@ -11,6 +11,7 @@ load_dotenv()
 
 from tools.analysis_history import get_comparison_insights, save_monthly_analysis
 from tools.balance_tracker import update_balance
+from tools.month_totals import compute_month_totals, split_month, net_spending_by
 
 class FinancialAnalystAgent:
     def __init__(self):
@@ -27,46 +28,18 @@ class FinancialAnalystAgent:
         # ── Sign convention: negative = expense, positive = income/refund ──
         # ── Excluded=True transactions are SKIPPED from all calculations ──
         
-        # Ensure Excluded column exists
-        if 'Excluded' not in current_df.columns:
-            current_df = current_df.copy()
-            current_df['Excluded'] = False
-        
-        # Filter out excluded rows from ALL calculations
-        active_df = current_df[~current_df['Excluded'].fillna(False).astype(bool)]
-        excluded_count = len(current_df) - len(active_df)
-        
-        # 1. Income = all positive amounts (salaries, refunds, credits)
-        income_df = active_df[active_df['Amount'] > 0]
-        income = income_df['Amount'].sum()  # Already positive
-        
-        # 2. Separate Investments from regular expenses
-        # Investments are money going out but NOT consumption — they're wealth allocation.
-        # Match by Category='Investments' OR the known אנליסט keyword as fallback.
-        investments_df = active_df[
-            (active_df['Amount'] < 0) &  # Investments are money going out
-            (
-                (active_df['Category'] == 'Investments') |
-                (active_df['Description'].str.contains('אנליסט', case=False, na=False))
-            )
-        ]
-        
-        expenses_df = active_df[
-            (active_df['Amount'] < 0) &  # Only money going out
-            (~active_df.index.isin(investments_df.index))
-        ]
-        
-        # 3. Calculate totals
-        # Expenses are negative, use abs() for display
-        expenses = expenses_df['Amount'].abs().sum()
-        investments = investments_df['Amount'].abs().sum()
-        
-        # Debug output
+        # Income, net spending (refunds reduce spending, they are not income)
+        # and investments all come from one shared calculation.
+        income_df, expenses_df, investments_df = split_month(current_df)
+        totals = compute_month_totals(current_df)
+        income = totals['income']
+        expenses = totals['expenses']
+        investments = totals['investments']
+
+        # Debug output (amounts only — no descriptions in logs)
         print(f"\n💰 Financial Breakdown:")
-        if excluded_count > 0:
-            print(f"  ⚠️  Excluded from calculations: {excluded_count} transactions (marked 'Don't Count')")
         print(f"  Total Income: ₪{income:,.2f}")
-        print(f"  Total Expenses: ₪{expenses:,.2f} ({len(expenses_df)} transactions)")
+        print(f"  Total Expenses: ₪{expenses:,.2f} ({len(expenses_df)} transactions, refunds ₪{totals['refunds']:,.2f} netted)")
         print(f"  Total Investments: ₪{investments:,.2f} ({len(investments_df)} transactions)")
         if len(investments_df) > 0:
             print(f"  Investment transactions:")
@@ -83,8 +56,8 @@ class FinancialAnalystAgent:
         print(f"  Net Savings: ₪{net_savings:,.2f} ({savings_rate:.1f}%)")
         
         # 5. Groupings for the prompt
-        expenses_by_category = expenses_df.groupby('Category')['Amount'].apply(lambda x: x.abs().sum()).sort_values(ascending=False)
-        top_subcategories = expenses_df.groupby('Sub_Category')['Amount'].apply(lambda x: x.abs().sum()).sort_values(ascending=False).head(10)
+        expenses_by_category = net_spending_by(expenses_df, 'Category')
+        top_subcategories = net_spending_by(expenses_df, 'Sub_Category').head(10)
         
         investments_breakdown = ""
         if investments > 0:
