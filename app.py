@@ -14,6 +14,9 @@ from tools.credit_card_ingestion import IngestionAgent
 from classifier_agent import process_and_classify 
 from tools.classify_dataframe import classify_dataframe, save_approved_to_memory
 from tools.analyst_agent import FinancialAnalystAgent
+from tools.month_totals import split_month, INCOME_CATEGORIES
+from tools.editor_state import reset_raw_editor_state
+import numpy as np
 from tools.balance_tracker import load_balance, get_avg_savings_rate
 
 # Global taxonomy for category/sub-category dropdowns
@@ -882,6 +885,7 @@ if run_button and uploaded_files:
             
             # Phase 4 - Skip LLM for now, let user review first
             my_bar.progress(100, text=t('progress_complete', L))
+            reset_raw_editor_state(st.session_state)  # editor widgets are keyed by row index
             st.session_state['current_df'] = final_classified_df
             st.session_state['history_df'] = full_history_df
             st.session_state['story'] = None  # No story yet - user needs to review and approve first
@@ -978,6 +982,7 @@ if 'dup_txns' in st.session_state and st.session_state['dup_txns']:
             valid_indices = [i for i in indices_to_remove if i in df.index]
             if valid_indices:
                 df = df.drop(index=valid_indices).reset_index(drop=True)
+                reset_raw_editor_state(st.session_state)  # editor widgets are keyed by row index
                 st.session_state['current_df'] = df
                 
                 # Regenerate story with corrected data
@@ -1129,6 +1134,7 @@ if 'pending_reviews' in st.session_state and st.session_state['pending_reviews']
                     mask = df['Description'].str.strip() == entry['merchant_name']
                     df.loc[mask, 'Category'] = entry['category']
                     df.loc[mask, 'Sub_Category'] = entry['sub_category']
+                reset_raw_editor_state(st.session_state)  # editor widgets are keyed by row index
                 st.session_state['current_df'] = df
                 
                 # Regenerate the story with corrected classifications
@@ -1220,15 +1226,11 @@ if 'current_df' in st.session_state:
         # Filter to expenses only (negative amounts = money out)
         # Exclude investments (Category='Investments' or אנליסט keyword)
         # Exclude rows marked "Don't Count"
-        if 'Excluded' not in curr_df.columns:
-            curr_df['Excluded'] = False
-        expenses_only = curr_df[
-            (curr_df['Amount'] < 0) &
-            (curr_df['Category'] != 'Investments') &
-            (~curr_df['Description'].str.contains('אנליסט', case=False, na=False)) &
-            (~curr_df['Excluded'].fillna(False).astype(bool))
-        ].copy()
-        expenses_only['Amount'] = expenses_only['Amount'].abs()
+        # Refunds stay in, as negative spending, so they reduce their category
+        # (abs() used to ADD a refund to its category's spending).
+        _, expenses_only, _ = split_month(curr_df)
+        expenses_only = expenses_only.copy()
+        expenses_only['Amount'] = -expenses_only['Amount']
         # Translate category/sub-category labels for charts
         expenses_only['Category'] = expenses_only['Category'].apply(lambda x: cat_display(x, L))
         expenses_only['Sub_Category'] = expenses_only['Sub_Category'].apply(lambda x: sub_display(x, L))
@@ -1332,6 +1334,14 @@ if 'current_df' in st.session_state:
                 (~hist_df['Description'].astype(str).str.contains('אנליסט', case=False, na=False)) &
                 (~hist_df['Excluded'].fillna(False).astype(bool))
             ]
+            # Income = money in categorised as Income. Any other money in is a
+            # refund and reduces spending; it is not income. Decide this on the
+            # raw category names, before they are translated for display.
+            hist_df['Type'] = np.where(
+                (hist_df['Amount'] > 0) & hist_df['Category'].isin(INCOME_CATEGORIES),
+                'Income', 'Expenses')
+            # Positive spending number: expenses count up, refunds count down
+            hist_df['Signed'] = np.where(hist_df['Type'] == 'Income', hist_df['Amount'], -hist_df['Amount'])
             # Translate category/sub-category labels for charts and table
             hist_df['Category'] = hist_df['Category'].apply(lambda x: cat_display(x, L))
             hist_df['Sub_Category'] = hist_df['Sub_Category'].apply(lambda x: sub_display(x, L))
@@ -1342,11 +1352,9 @@ if 'current_df' in st.session_state:
             else:
                 st.info(f"📅 Showing data for {len(actual_months)} months: {', '.join(actual_months)}")
             # Separate Income vs Expenses based on amount sign
-            hist_df['Type'] = hist_df['Amount'].apply(lambda x: 'Income' if x > 0 else 'Expenses')
-            # Group by Month and Type (Income vs Expenses) - use abs for display
-            income_expense_timeline = hist_df.groupby(['Month_Year', 'Type'])['Amount'].apply(
-                lambda x: x.abs().sum()
-            ).reset_index()
+            # Group by Month and Type (Income vs net Expenses)
+            income_expense_timeline = (hist_df.groupby(['Month_Year', 'Type'])['Signed'].sum()
+                                       .reset_index().rename(columns={'Signed': 'Amount'}))
             # Filter to only show months that have actual data
             income_expense_timeline = income_expense_timeline[income_expense_timeline['Month_Year'].isin(actual_months)]
             if not income_expense_timeline.empty and len(actual_months) > 0:
@@ -1390,12 +1398,12 @@ if 'current_df' in st.session_state:
             st.markdown("---")
             
             # Create a separate dataframe for expense categories only (exclude Income for this chart)
-            hist_df_expenses = hist_df[~hist_df['Category'].isin(['Income', 'הכנסות', 'Investments', 'השקעות'])].copy()
-            
-            # Group by Month and Category for detailed breakdown
-            hist_grouped = hist_df_expenses.groupby(['Month_Year', 'Category'])['Amount'].apply(
-                lambda x: x.abs().sum()
-            ).reset_index()
+            hist_df_expenses = hist_df[hist_df['Type'] == 'Expenses'].copy()
+
+            # Group by Month and Category: net spending, refunds subtract
+            hist_grouped = (hist_df_expenses.groupby(['Month_Year', 'Category'])['Signed'].sum()
+                            .reset_index().rename(columns={'Signed': 'Amount'}))
+            hist_grouped = hist_grouped[hist_grouped['Amount'] > 0]
             
             # Filter to only actual months
             hist_grouped = hist_grouped[hist_grouped['Month_Year'].isin(actual_months)]
@@ -1628,6 +1636,7 @@ if 'current_df' in st.session_state:
                         cat_changes += 1
                 
                 df = df.reset_index(drop=True)
+                reset_raw_editor_state(st.session_state)  # editor widgets are keyed by row index
                 st.session_state['current_df'] = df
                 
                 # Save to history (but don't regenerate story yet)

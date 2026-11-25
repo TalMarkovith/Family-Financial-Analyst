@@ -28,6 +28,8 @@ import json
 import os
 from functools import lru_cache
 
+from tools.month_totals import split_month
+
 import pandas as pd
 
 # ── File locations (relative to project root, matching app.py) ──
@@ -136,23 +138,18 @@ def load_story(month: str) -> str | None:
 # Masks
 # ──────────────────────────────────────────────────────────────────────────
 def real_spend(df: pd.DataFrame) -> pd.DataFrame:
-    """Return only rows that count as real living expenses (positive amounts, abs'd).
+    """Return the rows that make up living expenses, as a positive spend amount.
 
-    Applies the exact same three exclusions the analyst uses:
-      * Category == 'Investments'            (brokerage/savings transfers)
-      * Description contains 'אנליסט'         (analyst brokerage keyword)
-      * Excluded == True                     ("don't count" flag)
+    Same rule as the analyst (tools/month_totals.py): drop Investments, the
+    'אנליסט' brokerage keyword and Excluded rows; money in with an Income
+    category is income. Any other money in is a refund and stays here with a
+    NEGATIVE AbsAmount, so sums are net (a refunded ₪8,080 charge nets to 0).
     """
     if df.empty:
         return df.assign(AbsAmount=pd.Series(dtype=float))
-    mask = (
-        (df["Amount"] < 0)
-        & (df["Category"] != "Investments")
-        & (~df["Description"].astype(str).str.contains(_INVEST_KEYWORD, case=False, na=False))
-        & (~df["Excluded"])
-    )
-    out = df[mask].copy()
-    out["AbsAmount"] = out["Amount"].abs()
+    _, spend, _ = split_month(df)
+    out = spend.copy()
+    out["AbsAmount"] = -out["Amount"]
     return out
 
 
