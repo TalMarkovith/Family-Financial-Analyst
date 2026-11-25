@@ -17,6 +17,7 @@ load_dotenv()
 from tools.maps_lookup import get_merchant_context
 from tools.memory_manager import MemoryManager
 from local_prompts.prompts import FINANCIAL_TAXONOMY_PROMPT
+from tools.taxonomy import normalize_category
 
 def classify_dataframe(df):
     """
@@ -66,17 +67,19 @@ def classify_dataframe(df):
         ('ויצו',                           'Kids_Family',   'Gan_Education'),
     ]
 
-    for index, row in df.iterrows():
+    # Progress uses the running position, not the DataFrame index: the index
+    # is not 0..n-1 after filtering, which printed e.g. "[97/78]".
+    for pos, (index, row) in enumerate(df.iterrows(), start=1):
         merchant = str(row['Description']).strip()
         
         # Guard: skip garbage merchant names (nan, empty, pandas Series strings)
         if not merchant or merchant.lower() == 'nan' or 'dtype:' in merchant or len(merchant) < 2:
-            print(f"[{index+1}/{total_transactions}] ⏭️  Skipping garbage: '{merchant[:40]}'")
+            print(f"[{pos}/{total_transactions}] ⏭️  Skipping garbage: '{merchant[:40]}'")
             categories.append('Unknown')
             sub_categories.append('Unknown')
             continue
         
-        print(f"[{index+1}/{total_transactions}] Processing: {merchant[:40]}...")
+        print(f"[{pos}/{total_transactions}] Processing: {merchant[:40]}...")
         
         # 0. Keyword constants — substring match for known recurring charges
         # CRITICAL: must run BEFORE the salary heuristic, because the salary
@@ -182,9 +185,12 @@ def classify_dataframe(df):
         categories.append(cat)
         sub_categories.append(sub_cat)
 
-    # Add the new columns to the DataFrame
-    df['Category'] = categories
-    df['Sub_Category'] = sub_categories
+    # Force each parent to follow its sub-category (memory and the LLM can
+    # return an older parent, e.g. Variable_Daily/Groceries_Supermarket).
+    pairs = [normalize_category(c, s) for c, s in zip(categories, sub_categories)]
+    df['Category'] = [c for c, _ in pairs]
+    df['Sub_Category'] = [s for _, s in pairs]
+    pending_saves = [(m, *normalize_category(c, s), a) for (m, c, s, a) in pending_saves]
     
     # DON'T auto-save to memory anymore — return pending_saves for human review
     # The app will show a review table and only save approved entries
@@ -213,12 +219,9 @@ def save_approved_to_memory(approved_list):
     saved = 0
     for item in approved_list:
         try:
-            memory.save_merchant_to_memory(
-                item['merchant_name'],
-                item['category'],
-                item['sub_category']
-            )
-            print(f"   ✅ Saved: {item['merchant_name']} → {item['category']}/{item['sub_category']}")
+            cat, sub_cat = normalize_category(item['category'], item['sub_category'])
+            memory.save_merchant_to_memory(item['merchant_name'], cat, sub_cat)
+            print(f"   ✅ Saved: {item['merchant_name']} → {cat}/{sub_cat}")
             saved += 1
         except Exception as e:
             print(f"   ⚠️ Failed to save '{item['merchant_name']}': {e}")

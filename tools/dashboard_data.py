@@ -29,6 +29,7 @@ import os
 from functools import lru_cache
 
 from tools.month_totals import split_month
+from tools.taxonomy import normalize_frame
 
 import pandas as pd
 
@@ -95,6 +96,11 @@ def load_ledger() -> pd.DataFrame:
         if df["Excluded"].dtype == object
         else df["Excluded"].fillna(False).astype(bool)
     )
+
+    # One parent per sub-category, so category trends compare like with like
+    # even for rows saved before tools/taxonomy.py existed.
+    if "Sub_Category" in df.columns:
+        df = normalize_frame(df)
 
     # Drop rows without a usable date and add a Month period column
     df = df.dropna(subset=["Date"]).copy()
