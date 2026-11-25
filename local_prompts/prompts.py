@@ -13,7 +13,9 @@ Here is the family's EXACT financial taxonomy. You MUST use ONLY these category 
 8.  Transportation: [Car_Gas_Tolls, Public_Transit_Taxi, Parking_Tolls, Car_Maintenance_Licensing]
 9.  Food: [Groceries_Supermarket, Coffee_Restaurants]
 10. Food_Delivery: [Dining_Restaurants_Wolt]
-11. Variable_Daily: [Groceries_Supermarket, Dining_Restaurants_Wolt, Home_Furniture_Decor, Clothing_Shoes, Gifts_Events, General_Shopping]
+11. Variable_Daily: [Home_Furniture_Decor, Clothing_Shoes, Gifts_Events, General_Shopping]
+
+Each sub_category belongs to exactly ONE category above. Groceries are always Food / Groceries_Supermarket; delivery and restaurants are always Food_Delivery / Dining_Restaurants_Wolt — never Variable_Daily.
 12. Leisure_Grooming: [Subscriptions, Personal_Care_Hair_Nails, Hobbies_Entertainment_Vacation]
 13. Leisure: [Tal_Specials]
 14. Home: [Direct_Online_Shopping]

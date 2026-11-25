@@ -19,26 +19,8 @@ from tools.editor_state import reset_raw_editor_state
 import numpy as np
 from tools.balance_tracker import load_balance, get_avg_savings_rate
 
-# Global taxonomy for category/sub-category dropdowns
-TAXONOMY = {
-    'Housing_Fixed': ['Rent_Mortgage', 'Utilities_Arnona_Elec_Water_Gas', 'Communication', 'Maintenance_Vaad_Cleaner'],
-    'Insurance_Health': ['Insurances', 'Kupat_Holim', 'Private_Medical'],
-    'Kids_Family': ['Gan_Education', 'Baby_Equipment_Pharm', 'Kids_Clothing_Toys'],
-    'Transportation': ['Car_Gas_Tolls', 'Public_Transit_Taxi', 'Parking_Tolls', 'Car_Maintenance_Licensing'],
-    'Variable_Daily': ['Groceries_Supermarket', 'Dining_Restaurants_Wolt', 'Home_Furniture_Decor', 'Clothing_Shoes', 'Gifts_Events', 'General_Shopping'],
-    'Leisure_Grooming': ['Subscriptions', 'Personal_Care_Hair_Nails', 'Hobbies_Entertainment_Vacation'],
-    'Food': ['Groceries_Supermarket', 'Coffee_Restaurants'],
-    'Food_Delivery': ['Dining_Restaurants_Wolt'],
-    'Pharm': ['Pharm'],
-    'Health': ['Medical_Insurance', 'sport_club_gym'],
-    'Insurance': ['Life_Insurance', 'Medical_Private_Insurance'],
-    'Home': ['Direct_Online_Shopping'],
-    'Investments': ['Savings_Analyst_Brokerage'],
-    'Income': ['Tal_Salary', 'Reut_Salary', 'Other_Income_Bit'],
-    'Rio': ['Rio_Food', 'Rio_Health', 'Rio_Accessories'],
-    'Leisure': ['Tal_Specials'],
-}
-ALL_CATEGORIES = list(TAXONOMY.keys())
+# Global taxonomy for category/sub-category dropdowns (one parent per sub-category)
+from tools.taxonomy import TAXONOMY, ALL_CATEGORIES, normalize_frame
 
 # Initialize session state for pinned insights
 if 'pinned_insights' not in st.session_state:
@@ -528,6 +510,8 @@ def save_to_history(new_df):
     
     # Normalise dates on the incoming frame so month-prefix filtering is reliable
     new_df = _ensure_date_column(new_df.copy())
+    # The parent category always follows the sub-category (tools/taxonomy.py)
+    new_df = normalize_frame(new_df)
 
     if not history_df.empty:
         # Only keep data from different months, remove duplicates from the same month
